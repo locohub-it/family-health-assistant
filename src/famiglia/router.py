@@ -1,194 +1,235 @@
-"""Sceglie il provider AI per ogni funzione (lettura dei documenti, domande) in base alle impostazioni del pannello."""
+"""Sceglie servizio e modello per ogni funzione (lettura dei documenti, domande), con una riserva."""
 
 from __future__ import annotations
 
-import json
-from typing import Callable
+from typing import Awaitable, Callable, TypeVar
 
-from .ai import PROVIDERS, ROLES, AiError, Endpoint, NotConfigured, suggest_model, vision_candidates, whisper_model
+from .ai import ROLES, AiError, Endpoint, NotConfigured, suggest_model, vision_candidates, whisper_model
 from .gemini import Extraction, Gemini
 from .openai_compat import OpenAICompat
+from .services import AiService, AiServices
 from .settings import Settings
 
-CACHE_KEY = "ai_models_cache"
 GEMINI_CONTEXT_CHARS = 60000
 DEFAULT_OTHER_CONTEXT_CHARS = 9000  # circa 3.000 token: sta nel limite di 8.000 al minuto del piano gratuito di Groq
 MIN_CONTEXT_CHARS = 2000
+T = TypeVar("T")
 
 
 class AiRouter:
-    """Ha la stessa interfaccia di Gemini per documenti e domande, ma inoltra al provider scelto."""
+    """Ha la stessa interfaccia per documenti e domande, ma inoltra al servizio scelto (e alla riserva se serve)."""
 
-    def __init__(self, settings: Settings, gemini: Gemini, openai: OpenAICompat, log: Callable[[str, str], None]) -> None:
+    def __init__(self, services: AiServices, settings: Settings, gemini: Gemini, openai: OpenAICompat, log: Callable[[str, str], None]) -> None:
+        self._services = services
         self._settings = settings
         self._gemini = gemini
         self._openai = openai
         self._log = log
 
-    # --- Configurazione --------------------------------------------------------------
+    # --- Scelte dell'admin -----------------------------------------------------------
 
-    def provider(self, role: str) -> str:
-        value = self._settings.get(f"ai_{role}_provider")
-        return value if value in PROVIDERS else "gemini"
+    @staticmethod
+    def prefix(role: str, backup: bool = False) -> str:
+        return f"ai_{role}_backup" if backup else f"ai_{role}"
 
-    def model(self, role: str) -> str:
-        return self._settings.get(f"ai_{role}_model")
+    def slot(self, role: str, backup: bool = False) -> tuple[AiService | None, str]:
+        """Servizio e modello scelti per una funzione (principale o riserva); il servizio è None se non scelto o rimosso."""
+        prefix = self.prefix(role, backup)
+        raw = self._settings.get(f"{prefix}_service")
+        service = self._services.get(int(raw)) if raw.isdigit() else None
+        return service, self._settings.get(f"{prefix}_model")
+
+    def _endpoint(self, role: str, backup: bool) -> tuple[AiService, Endpoint]:
+        service, model = self.slot(role, backup)
+        if service is None:
+            raise NotConfigured(f"Nessun servizio scelto per «{ROLES[role]}»: chi gestisce il bot deve sceglierlo in Modelli IA.")
+        if not model:
+            raise NotConfigured(f"Nessun modello scelto per «{ROLES[role]}» ({service.name}): chi gestisce il bot deve sceglierlo in Modelli IA.")
+        return service, service.endpoint(model)
+
+    def _backend(self, service: AiService):
+        return self._gemini if service.kind == "gemini" else self._openai
 
     def context_budget(self) -> int:
-        """Quanti caratteri di dati mandare a ogni domanda: Gemini regge molto, gli altri hanno limiti di token bassi."""
-        if self.provider("chat") == "gemini":
-            return GEMINI_CONTEXT_CHARS
+        """Quanti caratteri di dati mandare a ogni domanda: il più piccolo tra i servizi che potrebbero rispondere."""
         try:
-            return max(MIN_CONTEXT_CHARS, int(self._settings.get("ai_context_chars")))
+            configured = max(MIN_CONTEXT_CHARS, int(self._settings.get("ai_context_chars")))
         except ValueError:
-            return DEFAULT_OTHER_CONTEXT_CHARS
+            configured = DEFAULT_OTHER_CONTEXT_CHARS
+        budgets = [
+            GEMINI_CONTEXT_CHARS if service.kind == "gemini" else configured
+            for service, _ in (self.slot("chat", False), self.slot("chat", True))
+            if service is not None
+        ]
+        return min(budgets) if budgets else configured
 
-    def endpoint(self, provider: str, model: str = "") -> Endpoint:
-        preset = PROVIDERS[provider]
-        base_url = preset["base_url"] or (self._settings.get("custom_base_url").strip() if provider == "custom" else "")
-        key = self._settings.get(f"{provider}_api_key")
-        if not key:
-            raise NotConfigured(f"{preset['label']} non è configurato: manca la chiave. Avvisa chi gestisce il bot.")
-        if not base_url:
-            raise NotConfigured("Manca l'indirizzo del servizio compatibile OpenAI. Avvisa chi gestisce il bot.")
-        return Endpoint(provider, preset["label"], base_url, key, model)
+    # --- Esecuzione con riserva ----------------------------------------------------------
 
-    def role_endpoint(self, role: str) -> Endpoint:
-        model = self.model(role)
-        if not model:
-            raise AiError(f"Nessun modello scelto per «{ROLES[role]}»: chi gestisce il bot deve sceglierlo dal pannello.")
-        return self.endpoint(self.provider(role), model)
-
-    # --- Le due funzioni del bot -----------------------------------------------------
+    async def _run(self, role: str, action: Callable[[AiService, Endpoint], Awaitable[T]]) -> T:
+        """Prova la principale; se non risponde (quota, errore, servizio assente) prova la riserva, se c'è."""
+        failures: list[AiError] = []
+        for backup in (False, True):
+            if backup and self.slot(role, True)[0] is None:
+                break
+            try:
+                service, endpoint = self._endpoint(role, backup)
+                result = await action(service, endpoint)
+            except AiError as exc:
+                failures.append(exc)
+                continue
+            if failures:
+                self._log(
+                    "errore",
+                    f"{ROLES[role]}: la principale non ha risposto ({failures[0]}); ha risposto la riserva ({service.name} · {endpoint.model})",
+                )
+            return result
+        if len(failures) > 1:
+            self._log("errore", f"{ROLES[role]}: anche la riserva non ha risposto ({failures[1]})")
+        raise failures[0]  # il messaggio più utile è quello della principale
 
     async def analyze_document(self, data: bytes, mime: str) -> Extraction:
-        if self.provider("docs") == "gemini":
-            return await self._gemini.analyze_document(data, mime, self.model("docs") or None)
-        return await self._openai.analyze_document(self.role_endpoint("docs"), data, mime)
+        async def action(service: AiService, endpoint: Endpoint) -> Extraction:
+            return await self._backend(service).analyze_document(endpoint, data, mime)
+
+        return await self._run("docs", action)
 
     async def answer(
         self, context: str, sender_name: str, question: str | None = None, audio: bytes | None = None, audio_mime: str = ""
     ) -> str:
-        if self.provider("chat") == "gemini":
-            return await self._gemini.answer(context, sender_name, question, audio, audio_mime, self.model("chat") or None)
-        endpoint = self.role_endpoint("chat")
-        if audio:
-            question = await self._transcribe(endpoint, audio, audio_mime)
-        return await self._openai.answer(endpoint, context, sender_name, question or "")
+        async def action(service: AiService, endpoint: Endpoint) -> str:
+            if service.kind == "gemini":
+                return await self._gemini.answer(endpoint, context, sender_name, question, audio, audio_mime)
+            text = await self._transcribe(service, endpoint, audio, audio_mime) if audio else (question or "")
+            return await self._openai.answer(endpoint, context, sender_name, text)
 
-    async def _transcribe(self, endpoint: Endpoint, audio: bytes, mime: str) -> str:
-        """I vocali si trascrivono con il modello Whisper del provider, se ne ha uno."""
-        model = whisper_model(self.cached_models(endpoint.provider))
+        return await self._run("chat", action)
+
+    async def _transcribe(self, service: AiService, endpoint: Endpoint, audio: bytes, mime: str) -> str:
+        """I vocali si trascrivono con il modello Whisper del servizio, se ne ha uno."""
+        model = whisper_model(list(service.models))
         if not model:
             try:
-                model = whisper_model(await self.refresh_models(endpoint.provider))
+                model = whisper_model(await self.refresh_models(service.id))
             except AiError:
                 model = ""
         if not model:
-            raise AiError(f"Con {endpoint.label} non posso ascoltare i vocali: scrivimi la domanda.")
+            raise AiError(f"Con {service.name} non posso ascoltare i vocali: scrivimi la domanda.")
         return await self._openai.transcribe(endpoint, model, audio, mime)
 
-    # --- Elenco dei modelli ----------------------------------------------------------
+    # --- Elenco dei modelli e scelta automatica -------------------------------------------
 
-    def cached_models(self, provider: str) -> list[str]:
-        try:
-            cache = json.loads(self._settings.get(CACHE_KEY) or "{}")
-        except ValueError:
-            return []
-        return [str(m) for m in cache.get(provider, [])] if isinstance(cache, dict) else []
-
-    async def refresh_models(self, provider: str) -> list[str]:
-        """Chiede al provider i modelli disponibili con la chiave in uso e li tiene da parte."""
-        ids = await self._gemini.list_models() if provider == "gemini" else await self._openai.list_models(self.endpoint(provider))
-        try:
-            cache = json.loads(self._settings.get(CACHE_KEY) or "{}")
-        except ValueError:
-            cache = {}
-        cache = cache if isinstance(cache, dict) else {}
-        cache[provider] = ids
-        self._settings.update({CACHE_KEY: json.dumps(cache)})
+    async def refresh_models(self, service_id: int) -> list[str]:
+        """Chiede al servizio i modelli disponibili con la sua chiave e li tiene da parte."""
+        service = self._services.get(service_id)
+        if service is None:
+            raise AiError("Servizio non trovato.")
+        ids = await self._backend(service).list_models(service.endpoint())
+        self._services.set_models(service_id, ids)
         return ids
 
     async def refresh_and_pick(self) -> list[tuple[str, bool | None]]:
-        """Aggiorna l'elenco dei provider in uso e sceglie da solo il modello dove manca o non esiste più.
+        """Aggiorna l'elenco dei servizi in uso e sceglie da solo il modello dove manca.
 
         Restituisce messaggi (testo, esito) da mostrare all'admin: True = riuscito, False = errore vero,
         None = nota (per esempio una chiave non ancora inserita, che non è un guasto).
+        Un modello scelto dall'admin non viene mai sostituito: se non compare nell'elenco si segnala.
         """
         messages: list[tuple[str, bool | None]] = []
-        refreshed: dict[str, list[str]] = {}
+        listed: dict[int, list[str]] = {}
         for role, label in ROLES.items():
-            provider = self.provider(role)
-            if provider not in refreshed:
-                try:
-                    refreshed[provider] = await self.refresh_models(provider)
-                except NotConfigured:
-                    refreshed[provider] = []
-                    messages.append((f"{PROVIDERS[provider]['label']}: chiave non impostata, elenco dei modelli non caricato.", None))
-                except AiError as exc:
-                    refreshed[provider] = []
-                    messages.append((f"{PROVIDERS[provider]['label']}: {exc.user_message}", False))
-            ids = refreshed[provider]
-            current, name = self.model(role), PROVIDERS[provider]["label"]
-            if not ids:
-                continue
-            if provider == "gemini":
-                # Per Gemini il modello resta quello di «Chiavi API», salvo una scelta esplicita per questa funzione.
-                shown = current or self._settings.get("gemini_model")
-                messages.append((f"{label}: Gemini, modello {shown} ({len(ids)} disponibili)", True))
-            elif not current and role == "docs":
-                messages.append(await self._pick_vision_model(provider, ids))
-            elif not current:
-                chosen = suggest_model(role, ids)
-                if chosen:
-                    self._settings.update({f"ai_{role}_model": chosen})
-                    messages.append((f"{label}: scelto {chosen} tra i {len(ids)} modelli di {name}", True))
+            for backup in (False, True):
+                service, model = self.slot(role, backup)
+                if service is None:
+                    continue
+                if service.id not in listed:
+                    listed[service.id] = await self._refresh_safely(service, messages)
+                ids = listed[service.id]
+                if not ids:
+                    continue
+                name = f"{label} · {'riserva' if backup else 'principale'}"
+                if not model:
+                    chosen, text, ok = await self._choose(role, service, ids, name)
+                    if chosen:
+                        self._settings.update({f"{self.prefix(role, backup)}_model": chosen})
+                    messages.append((text, ok))
+                elif model not in ids:
+                    # Potrebbe essere un nome valido ma non elencato: non si sostituisce, si segnala.
+                    messages.append((f"{name}: «{model}» non compare tra i {len(ids)} modelli di {service.name}: verifica con «Prova»", False))
                 else:
-                    messages.append((f"{label}: nessun modello adatto tra quelli di {name}: scrivi il nome a mano", False))
-            elif current not in ids:
-                # Potrebbe essere un nome valido ma non elencato: non si sostituisce, si segnala.
-                messages.append((f"{label}: «{current}» non compare tra i {len(ids)} modelli di {name}: verifica con «Prova»", False))
-            else:
-                messages.append((f"{label}: {current} (trovato tra i {len(ids)} modelli di {name})", True))
+                    messages.append((f"{name}: {model} (trovato tra i {len(ids)} modelli di {service.name})", True))
         return messages
 
-    async def _pick_vision_model(self, provider: str, ids: list[str]) -> tuple[str, bool]:
+    async def _refresh_safely(self, service: AiService, messages: list) -> list[str]:
+        try:
+            return await self.refresh_models(service.id)
+        except NotConfigured:
+            messages.append((f"{service.name}: chiave non impostata, elenco dei modelli non caricato.", None))
+        except AiError as exc:
+            messages.append((f"{service.name}: {exc.user_message}", False))
+        return []
+
+    async def _choose(self, role: str, service: AiService, ids: list[str], name: str) -> tuple[str, str, bool]:
+        if role == "docs" and service.kind == "openai":
+            return await self._pick_vision_model(service, ids, name)
+        chosen = suggest_model(role, ids)
+        if chosen:
+            return chosen, f"{name}: scelto {chosen} tra i {len(ids)} modelli di {service.name}", True
+        return "", f"{name}: nessun modello adatto tra quelli di {service.name}: scrivi il nome a mano", False
+
+    async def _pick_vision_model(self, service: AiService, ids: list[str], name: str) -> tuple[str, str, bool]:
         """Per i documenti serve la visione: si prova ogni candidato con un'immagine e si tiene il primo che la legge."""
-        name, tried, last_error = PROVIDERS[provider]["label"], [], ""
+        tried, last_error = [], ""
         for model in vision_candidates(ids):
-            ok, detail = await self._openai.probe(self.endpoint(provider, model), "docs")
+            ok, detail = await self._openai.probe(service.endpoint(model), "docs")
             tried.append(model)
             if ok:
-                self._settings.update({"ai_docs_model": model})
-                return f"{ROLES['docs']}: scelto {model}, che legge le immagini (provati {len(tried)} su {len(ids)} modelli di {name})", True
+                return model, f"{name}: scelto {model}, che legge le immagini (provati {len(tried)} su {len(ids)} modelli di {service.name})", True
             last_error = detail
-        listed = ", ".join(tried) or "nessuno"
         return (
-            f"{ROLES['docs']}: nessun modello di {name} che legga le immagini (provati: {listed}). "
-            f"Scrivi il nome a mano oppure usa Gemini per i documenti. Ultimo errore: {last_error}",
+            "",
+            f"{name}: nessun modello di {service.name} che legga le immagini (provati: {', '.join(tried) or 'nessuno'}). "
+            f"Scrivi il nome a mano oppure scegli un altro servizio. Ultimo errore: {last_error}",
             False,
         )
 
-    async def repick(self) -> list[tuple[str, bool]]:
-        """Dimentica i modelli scelti dei servizi non Gemini e li sceglie di nuovo (con la prova delle immagini)."""
-        cleared = {f"ai_{role}_model": "" for role in ROLES if self.provider(role) != "gemini"}
+    async def repick(self) -> list[tuple[str, bool | None]]:
+        """Dimentica i modelli scelti e li sceglie di nuovo (per i documenti, con la prova delle immagini)."""
+        cleared = {}
+        for role in ROLES:
+            for backup in (False, True):
+                cleared[f"{self.prefix(role, backup)}_model"] = ""
         self._settings.update(cleared)
         return await self.refresh_and_pick()
 
-    # --- Prova ----------------------------------------------------------------------
+    # --- Prova ------------------------------------------------------------------------
 
-    async def probe(self, role: str) -> tuple[str, bool, str]:
-        """Prova reale del modello scelto per una funzione. Per i documenti verifica anche le immagini."""
-        provider, model = self.provider(role), self.model(role)
-        label = f"{ROLES[role]} · {PROVIDERS[provider]['label']} · {model or 'nessun modello'}"
-        if provider == "gemini":
-            ok, detail = await self._gemini.probe_model(model or self._settings.get("gemini_model"), image=role == "docs")
-            return label, ok, detail
-        try:
-            endpoint = self.role_endpoint(role)
-        except AiError as exc:
-            return label, False, exc.user_message
-        ok, detail = await self._openai.probe(endpoint, role)
-        if not ok and role == "docs" and "non sa leggere le immagini" in detail:
-            detail += " Premi «Scegli di nuovo in automatico» per cercare un modello che le legga."
-        return label, ok, detail
+    async def probe(self, role: str) -> list[tuple[str, bool, str]]:
+        """Prova reale del modello principale e di quello di riserva. Per i documenti verifica anche le immagini."""
+        results: list[tuple[str, bool, str]] = []
+        for backup in (False, True):
+            service, model = self.slot(role, backup)
+            which = "riserva" if backup else "principale"
+            if service is None:
+                if not backup:
+                    results.append((f"{ROLES[role]} · {which}", False, "Nessun servizio scelto: sceglilo in «Modelli da usare»."))
+                continue
+            label = f"{ROLES[role]} · {which} · {service.name} · {model or 'nessun modello'}"
+            if not model:
+                results.append((label, False, "Nessun modello scelto."))
+                continue
+            ok, detail = await self._backend(service).probe(service.endpoint(model), role)
+            if not ok and role == "docs" and "non sa leggere le immagini" in detail:
+                detail += " Premi «Scegli di nuovo in automatico» per cercare un modello che le legga."
+            results.append((label, ok, detail))
+        return results
+
+    def summary(self) -> list[tuple[str, str, str]]:
+        """Per la pagina Stato: funzione, modello principale e riserva, in parole."""
+        rows = []
+        for role, label in ROLES.items():
+            texts = []
+            for backup in (False, True):
+                service, model = self.slot(role, backup)
+                texts.append(f"{service.name} · {model or 'modello da scegliere'}" if service else "")
+            rows.append((label, texts[0] or "servizio da scegliere", texts[1]))
+        return rows

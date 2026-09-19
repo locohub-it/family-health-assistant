@@ -10,128 +10,131 @@
              border-radius:50%; animation:gira .9s linear infinite; }
   @keyframes gira { to { transform:rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration:3s; } }
+  .slot { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-top:12px; }
+  .slot h3 { font-size:14px; margin:0 0 4px; }
+  .step { display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; border-radius:50%;
+          background:var(--accent); color:#fff; font-size:13px; margin-right:6px; }
+  form.inline-actions { display:inline; }
+  .svc { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-top:10px; }
 </style>
 
 <h1>Modelli IA</h1>
-<p class="hint">Scegli quale servizio usa il bot per ciascuna funzione. Inserisci la chiave, poi scegli il servizio: il
-  pannello chiede da solo al servizio quali modelli ha a disposizione e sceglie quello adatto. Con <b>Prova</b> verifichi
-  che funzioni davvero. Il bot <b>non cerca sul web</b>: risponde con i dati salvati e le conoscenze del modello.</p>
+<p class="hint">Tre passi: <b>1</b> inserisci i servizi AI che possiedi (nome, indirizzo e chiave), <b>2</b> scegli quale modello usare
+  per leggere i documenti e per rispondere alle domande, con una riserva se vuoi, <b>3</b> verifica che funzioni. Il bot non cerca sul
+  web: risponde con i dati salvati e le conoscenze del modello.</p>
 
-<form method="post" action="/ia" id="form-ia" data-carica="Sto cercando i modelli disponibili…">
+<!-- 1. Servizi -->
+<div class="card">
+  <h2><span class="step">1</span>Servizi AI</h2>
+  {% if services %}
+  {% for sv in services %}
+  <div class="svc">
+    <div><b>{{ sv.name }}</b>
+      <span class="badge">{{ kinds[sv.kind] }}</span>
+      {% if sv.has_key %}<span class="badge ok">chiave impostata</span>{% elif sv.kind == 'gemini' %}<span class="badge error">chiave mancante</span>{% else %}<span class="badge">senza chiave</span>{% endif %}
+      {% if sv.models %}<span class="hint">{{ sv.models | length }} modelli</span>{% else %}<span class="hint">modelli da cercare</span>{% endif %}
+    </div>
+    {% if sv.base_url %}<div class="hint">{{ sv.base_url }}</div>{% endif %}
+    <div class="actions" style="margin-top:8px">
+      <form method="post" action="/ia/servizi/{{ sv.id }}/modelli" class="inline-actions" data-carica="Sto cercando i modelli di {{ sv.name }}…">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><button title="Chiede al servizio i modelli che ha (e verifica indirizzo e chiave)">↻ Aggiorna elenco</button></form>
+      <a href="/ia/servizi/{{ sv.id }}"><button type="button">Modifica</button></a>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="hint">Nessun servizio ancora: aggiungine uno qui sotto. Il primo che inserisci diventa il servizio di tutte le funzioni.</p>
+  {% endif %}
+
+  <form method="post" action="/ia/servizi" data-carica="Sto aggiungendo il servizio e cercando i modelli…" style="margin-top:16px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <h2 style="font-size:15px">Aggiungi un servizio</h2>
+    <label for="new_name">Nome <span class="hint">(come vuoi vederlo, es. Groq)</span></label>
+    <input id="new_name" name="name" type="text" maxlength="40" autocomplete="off" required>
+    <label for="new_kind">Tipo</label>
+    <select id="new_kind" name="kind">
+      {% for key, label in kinds.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+    </select>
+    <div id="new_address">
+      <label for="new_base_url">Indirizzo <span class="hint">(dell'API compatibile OpenAI)</span></label>
+      <input id="new_base_url" name="base_url" type="text" list="indirizzi" autocomplete="off" placeholder="https://…/v1">
+      <datalist id="indirizzi">{% for label, url in suggested %}<option value="{{ url }}">{{ label }}</option>{% endfor %}</datalist>
+    </div>
+    <label for="new_key">Chiave API <span class="hint">(facoltativa per un servizio sul tuo server)</span></label>
+    <input id="new_key" name="api_key" type="password" autocomplete="off">
+    <div class="hint" id="new_hint">Groq, DeepSeek, OpenRouter, OpenAI, Ollama e la maggior parte dei servizi usano il tipo «Compatibile OpenAI»:
+      scrivi l'indirizzo o sceglilo dai suggerimenti. Per Google Gemini scegli il tipo omonimo: l'indirizzo non serve.
+      Le chiavi sono salvate cifrate e non vengono mai mostrate.</div>
+    <div class="actions"><button class="primary">Aggiungi e cerca i modelli</button></div>
+  </form>
+</div>
+
+<!-- 2. Modelli da usare -->
+<form method="post" action="/ia" id="form-ia" class="card" data-carica="Sto cercando i modelli disponibili…">
   <input type="hidden" name="csrf" value="{{ csrf }}">
-
-  <div class="card">
-    <h2>Google Gemini</h2>
-    <label for="gemini_api_key">Chiave API {% if s.is_set('gemini_api_key') %}<span class="badge ok">impostata</span>{% endif %}</label>
-    <input id="gemini_api_key" name="gemini_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('gemini_api_key') else 'AIza…' }}">
-    <div class="hint">Da <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.
-      Sul piano gratuito Google può usare i contenuti inviati per migliorare i suoi prodotti: per dati sanitari
-      conviene un progetto con fatturazione attiva.</div>
-    <label for="gemini_model">Modello predefinito</label>
-    {% if gemini_models %}
-    <select id="gemini_model" name="gemini_model">
-      {% if s.get('gemini_model') not in gemini_models %}<option value="{{ s.get('gemini_model') }}" selected>{{ s.get('gemini_model') }} (attuale)</option>{% endif %}
-      {% for m in gemini_models %}<option value="{{ m }}" {{ 'selected' if m == s.get('gemini_model') }}>{{ m }}</option>{% endfor %}
-    </select>
-    {% else %}
-    <input id="gemini_model" name="gemini_model" type="text" value="{{ s.get('gemini_model') }}" required>
-    <div class="hint">L'elenco dei modelli si carica da solo quando scegli Gemini qui sotto, con la chiave impostata.</div>
-    {% endif %}
-    <label for="gemini_fallback_model">Modello di riserva <span class="hint">(facoltativo)</span></label>
-    {% if gemini_models %}
-    <select id="gemini_fallback_model" name="gemini_fallback_model">
-      <option value="">Nessuno</option>
-      {% if s.get('gemini_fallback_model') and s.get('gemini_fallback_model') not in gemini_models %}<option value="{{ s.get('gemini_fallback_model') }}" selected>{{ s.get('gemini_fallback_model') }} (attuale)</option>{% endif %}
-      {% for m in gemini_models %}<option value="{{ m }}" {{ 'selected' if m == s.get('gemini_fallback_model') }}>{{ m }}</option>{% endfor %}
-    </select>
-    {% else %}
-    <input id="gemini_fallback_model" name="gemini_fallback_model" type="text" value="{{ s.get('gemini_fallback_model') }}">
-    {% endif %}
-    <div class="hint">Se il modello principale ha finito le richieste gratuite o non risponde, il bot prova questo. Sul piano
-      gratuito i limiti sono per modello, quindi un secondo modello raddoppia le richieste disponibili.</div>
-  </div>
-
-  <div class="card">
-    <h2>Altri servizi</h2>
-    <label for="groq_api_key">Groq {% if s.is_set('groq_api_key') %}<span class="badge ok">chiave impostata</span>{% endif %}</label>
-    <input id="groq_api_key" name="groq_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('groq_api_key') else 'gsk_…' }}">
-    <label for="deepseek_api_key">DeepSeek {% if s.is_set('deepseek_api_key') %}<span class="badge ok">chiave impostata</span>{% endif %}</label>
-    <input id="deepseek_api_key" name="deepseek_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('deepseek_api_key') else 'sk-…' }}">
-    <label for="custom_base_url">Altro servizio compatibile OpenAI <span class="hint">(OpenRouter, Ollama sul tuo server…)</span></label>
-    <input id="custom_base_url" name="custom_base_url" type="text" value="{{ s.get('custom_base_url') }}" placeholder="https://…/v1">
-    <label for="custom_api_key">Chiave dell'altro servizio {% if s.is_set('custom_api_key') %}<span class="badge ok">impostata</span>{% endif %}</label>
-    <input id="custom_api_key" name="custom_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('custom_api_key') else '' }}">
-  </div>
+  <h2><span class="step">2</span>Modelli da usare</h2>
+  {% if not services %}
+  <p class="hint">Aggiungi prima un servizio nel riquadro 1.</p>
+  {% endif %}
 
   {% for role, label in roles.items() %}
-  {% set c = current[role] %}
-  <div class="card">
-    <h2>{{ label }}</h2>
-    {% if role == 'docs' %}
-    <p class="hint">Legge foto e PDF dei documenti. Serve un modello con <b>visione</b> per le foto; i PDF con testo li
-      leggono anche i modelli solo testo. Il pannello sceglie provando davvero i modelli con un'immagine, perché i
-      nomi non dicono chi vede e cambiano spesso.</p>
-    {% else %}
-    <p class="hint">Risponde alle domande scritte e ai vocali. I vocali si trascrivono con il modello Whisper del servizio, se
-      ne ha uno (Groq sì).</p>
-    {% endif %}
-    <label for="ai_{{ role }}_provider">Servizio</label>
-    <select id="ai_{{ role }}_provider" name="ai_{{ role }}_provider" class="provider-select">
-      {% for key, p in providers.items() %}<option value="{{ key }}" data-key-field="{{ key }}_api_key" data-has-key="{{ '1' if s.is_set(key ~ '_api_key') else '' }}" {{ 'selected' if c.provider == key }}>{{ p.label }}</option>{% endfor %}
+  <h3 style="margin:18px 0 4px; font-size:16px">{{ label }}</h3>
+  {% if role == 'docs' %}
+  <p class="hint">Legge foto e PDF. Serve un modello con <b>visione</b> per le foto (i PDF con testo li leggono tutti). Il pannello sceglie
+    provando davvero i modelli con un'immagine, perché i nomi non dicono chi vede.</p>
+  {% else %}
+  <p class="hint">Risponde alle domande scritte e ai vocali (i vocali con Gemini o con un servizio che ha Whisper, come Groq).</p>
+  {% endif %}
+  {% for slot in current[role] %}
+  <div class="slot">
+    <h3>{{ 'Riserva (facoltativa)' if slot.backup else 'Principale' }}</h3>
+    <div class="hint" style="margin:0 0 4px">{{ 'Risponde se la principale non può (limite finito, errore, servizio giù). Può essere di un altro servizio.' if slot.backup else 'Risponde sempre per prima.' }}</div>
+    <label for="{{ slot.prefix }}_service">Servizio</label>
+    <select id="{{ slot.prefix }}_service" name="{{ slot.prefix }}_service" class="service-select">
+      <option value="">{{ 'Nessuna riserva' if slot.backup else '— scegli un servizio —' }}</option>
+      {% for sv in services %}<option value="{{ sv.id }}" {{ 'selected' if slot.service and slot.service.id == sv.id }}>{{ sv.name }}</option>{% endfor %}
     </select>
-    <div class="flash error" data-warn hidden></div>
-    <div class="hint">Scegliendo un altro servizio, l'elenco dei modelli si carica da solo e il modello si sceglie in automatico.</div>
-    <label for="ai_{{ role }}_model_select">Modello</label>
-    {% if c.models or c.model %}
-    <select id="ai_{{ role }}_model_select" name="ai_{{ role }}_model_select">
-      {% if c.provider == 'gemini' %}<option value="" {{ 'selected' if not c.model }}>Predefinito ({{ s.get('gemini_model') }})</option>{% endif %}
-      {% if c.model and c.model not in c.models %}<option value="{{ c.model }}" selected>{{ c.model }} (attuale)</option>{% endif %}
-      {% for m in c.models %}<option value="{{ m }}" {{ 'selected' if m == c.model }}>{{ m }}</option>{% endfor %}
+    {% if slot.service %}
+    <label for="{{ slot.prefix }}_model_select">Modello</label>
+    {% if slot.models or slot.model %}
+    <select id="{{ slot.prefix }}_model_select" name="{{ slot.prefix }}_model_select">
+      {% if slot.model and slot.model not in slot.models %}<option value="{{ slot.model }}" selected>{{ slot.model }} (attuale)</option>{% endif %}
+      {% for m in slot.models %}<option value="{{ m }}" {{ 'selected' if m == slot.model }}>{{ m }}</option>{% endfor %}
     </select>
-    <div class="hint">{{ c.models | length }} modelli trovati nel servizio.</div>
+    <div class="hint">{{ slot.models | length }} modelli trovati in {{ slot.service.name }}.</div>
     {% else %}
-    <p class="hint">Nessun modello ancora: inserisci la chiave e scegli il servizio, oppure premi «Salva e cerca i modelli».</p>
+    <p class="hint">Nessun modello ancora: premi «Salva» oppure «↻ Aggiorna elenco» sul servizio.</p>
     {% endif %}
-    {% if role == 'chat' %}
-    <label for="ai_context_chars">Dati inviati a ogni domanda <span class="hint">(caratteri, con i servizi diversi da Gemini)</span></label>
-    <input id="ai_context_chars" name="ai_context_chars" type="number" min="2000" max="200000" step="1000" value="{{ s.get('ai_context_chars') }}">
-    <div class="hint">Il piano gratuito di Groq ammette circa 8.000 token al minuto: 9000 caratteri (circa 3.000 token) è un buon
-      valore. Con lo storico più lungo il bot invia solo i documenti più recenti. Con Gemini il limite è molto più alto.</div>
+    <label for="{{ slot.prefix }}_model_manual">…oppure scrivi il nome <span class="hint">(facoltativo, ha la precedenza)</span></label>
+    <input id="{{ slot.prefix }}_model_manual" name="{{ slot.prefix }}_model_manual" type="text" autocomplete="off" placeholder="{{ slot.model or 'nome esatto del modello' }}">
     {% endif %}
-    <label for="ai_{{ role }}_model_manual">…oppure scrivi il nome <span class="hint">(facoltativo, ha la precedenza)</span></label>
-    <input id="ai_{{ role }}_model_manual" name="ai_{{ role }}_model_manual" type="text" autocomplete="off" placeholder="{{ c.model or 'nome esatto del modello' }}">
   </div>
+  {% endfor %}
+  {% if role == 'chat' %}
+  <label for="ai_context_chars" style="margin-top:14px">Dati inviati a ogni domanda <span class="hint">(caratteri, con i servizi diversi da Gemini)</span></label>
+  <input id="ai_context_chars" name="ai_context_chars" type="number" min="2000" max="200000" step="1000" value="{{ s.get('ai_context_chars') }}">
+  <div class="hint">Il piano gratuito di Groq ammette circa 8.000 token al minuto: 9000 caratteri (circa 3.000 token) è un buon valore. Con lo
+    storico più lungo il bot invia solo i documenti più recenti. Con Gemini il limite è molto più alto.</div>
+  {% endif %}
   {% endfor %}
 
   <div class="actions"><button class="primary">Salva e cerca i modelli</button></div>
+  <div class="hint">Scegliendo un altro servizio in un menu, l'elenco dei modelli si carica da solo e il modello si sceglie in automatico.</div>
 </form>
 
-<form method="post" action="/ia/auto" class="card" data-carica="Sto provando i modelli, può servire qualche secondo…">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <h2>Scegli di nuovo i modelli</h2>
-  <p class="hint">Se un modello scelto prima non funziona (per esempio non legge le immagini), qui il pannello
-    dimentica le scelte dei servizi diversi da Gemini e le rifà da capo: per i documenti prova i modelli uno alla volta
-    con un'immagine e tiene il primo che la legge.</p>
-  <div class="actions"><button>Scegli di nuovo in automatico</button></div>
-</form>
-
-<div class="grid">
-  {% for role, label in roles.items() %}
-  <form method="post" action="/ia/prova/{{ role }}" class="card" data-carica="Sto provando il modello…">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <h2>Prova: {{ label | lower }}</h2>
-    <p class="hint">Fa una piccola richiesta vera al modello scelto{% if role == 'docs' %}, con un'immagine{% endif %} e mostra l'esito.
-      Salva prima le modifiche.</p>
-    <div class="actions"><button>Prova ora</button></div>
-  </form>
-  {% endfor %}
-  <form method="post" action="/ia/prova-gemini" class="card" data-carica="Sto provando Gemini…">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <h2>Prova Gemini</h2>
-    <p class="hint">Prova il modello principale e quello di riserva e mostra l'esito di ciascuno, con il motivo
-      esatto (la quota, per esempio) se uno fallisce.</p>
-    <div class="actions"><button>Prova ora</button></div>
-  </form>
+<!-- 3. Verifica -->
+<div class="card">
+  <h2><span class="step">3</span>Verifica</h2>
+  <p class="hint">«Prova» fa una piccola richiesta vera al modello principale e a quello di riserva e mostra l'esito di ciascuno, con il
+    motivo esatto (la quota, per esempio) se uno fallisce. Per i documenti manda anche un'immagine. Salva prima le modifiche.</p>
+  <div class="actions">
+    {% for role, label in roles.items() %}
+    <form method="post" action="/ia/prova/{{ role }}" class="inline-actions" data-carica="Sto provando i modelli…">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button>Prova: {{ label | lower }}</button></form>
+    {% endfor %}
+    <form method="post" action="/ia/auto" class="inline-actions" data-carica="Sto provando i modelli, può servire qualche secondo…">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><button title="Dimentica i modelli scelti e li sceglie di nuovo">Scegli di nuovo in automatico</button></form>
+  </div>
 </div>
 
 <div id="carica" class="overlay" role="status" aria-live="polite" hidden>
@@ -156,26 +159,20 @@
     form.addEventListener("submit", function () { show(form.getAttribute("data-carica")); });
   });
 
-  // Scegliendo un servizio, la lista dei modelli si carica da sola: si invia il modulo, come «Salva e cerca i modelli».
+  // Scegliendo un servizio in un menu, si invia il modulo: i modelli di quel servizio si caricano da soli.
   var main = document.getElementById("form-ia");
-  main.querySelectorAll("select.provider-select").forEach(function (select) {
-    var warn = select.parentNode.querySelector("[data-warn]");
+  main.querySelectorAll("select.service-select").forEach(function (select) {
     select.addEventListener("change", function () {
-      warn.hidden = true;
-      var option = select.options[select.selectedIndex];
-      var keyInput = document.getElementById(option.getAttribute("data-key-field"));
-      var hasKey = option.getAttribute("data-has-key") === "1" || (keyInput && keyInput.value.trim() !== "");
-      var missingUrl = option.value === "custom" && document.getElementById("custom_base_url").value.trim() === "";
-      if (!hasKey || missingUrl) {
-        warn.textContent = "Inserisci prima " + (missingUrl ? "l'indirizzo e " : "") + "la chiave di " + option.text +
-          " qui sopra, poi premi «Salva e cerca i modelli».";
-        warn.hidden = false;
-        if (keyInput && !hasKey) { keyInput.focus(); }
-        return;
-      }
       if (main.requestSubmit) { main.requestSubmit(); } else { show(main.getAttribute("data-carica")); main.submit(); }
     });
   });
+
+  // Per Gemini l'indirizzo non serve.
+  var kind = document.getElementById("new_kind");
+  var address = document.getElementById("new_address");
+  function toggle() { address.hidden = kind.value === "gemini"; }
+  kind.addEventListener("change", toggle);
+  toggle();
 })();
 </script>
 {% endblock %}

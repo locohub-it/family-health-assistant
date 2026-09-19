@@ -185,7 +185,7 @@ class OpenAICompat:
         self, endpoint: Endpoint, method: str, path: str, timeout: float | None = None, **kwargs
     ) -> httpx.Response:
         url = endpoint.base_url.rstrip("/") + path
-        headers = {"Authorization": f"Bearer {endpoint.api_key}"}
+        headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}  # un server locale può non avere chiave
         for attempt in range(MAX_RETRIES + 1):
             try:
                 async with self._slots:

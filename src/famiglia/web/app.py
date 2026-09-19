@@ -16,19 +16,17 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from ..ai import PROVIDERS, ROLES
+from ..ai import KINDS, ROLES, SUGGESTED_ADDRESSES, AiError, NotConfigured
 from ..auth import set_password, verify_password
 from ..calendar import CalendarError
 from ..clock import TIMEZONE
 from ..documents import DEFAULT_DOCUMENTS_DIR
-from ..gemini import GeminiError
 from ..service import Service
 from ..storage import StorageError
 from ..users import coordinator_of
 
 
 MODEL_NAME = re.compile(r"^[\w./:@\-]{1,120}$")
-BASE_URL = re.compile(r"^https?://[^\s]+$")
 
 
 class LoginRequired(Exception):
@@ -91,7 +89,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
                 "flashes": request.session.pop("flash", []),
                 "s": settings,
                 "service": service,
-                "missing": settings.missing_for_run(),
+                "missing": service.missing_for_run(),
                 **context,
             },
         )
@@ -163,10 +161,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             users=service.users.all(),
             default_dir=DEFAULT_DOCUMENTS_DIR,
             folder_problem=folder_problem(),
-            ai_summary=[
-                (label, PROVIDERS[service.ai.provider(role)]["label"], service.ai.model(role) or settings.get("gemini_model"))
-                for role, label in ROLES.items()
-            ],
+            ai_summary=service.ai.summary(),
         )
 
     # --- Chiavi API --------------------------------------------------------------
@@ -195,42 +190,111 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
 
     # --- Modelli IA --------------------------------------------------------------
 
+    def flash_messages(request: Request, messages: list) -> None:
+        for text, ok in messages:
+            flash(request, "info" if ok is None else ("ok" if ok else "error"), text)
+
+    def find_service(service_id: int):
+        found = service.ai_services.get(service_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="Servizio non trovato")
+        return found
+
     @app.get("/ia")
     async def ai_page(request: Request) -> Response:
         current = {}
         for role in ROLES:
-            provider, model = service.ai.provider(role), service.ai.model(role)
-            current[role] = {"provider": provider, "model": model, "models": service.ai.cached_models(provider)}
+            current[role] = []
+            for backup in (False, True):
+                chosen, model = service.ai.slot(role, backup)
+                current[role].append(
+                    {
+                        "backup": backup,
+                        "prefix": service.ai.prefix(role, backup),
+                        "service": chosen,
+                        "model": model,
+                        "models": list(chosen.models) if chosen else [],
+                    }
+                )
         return page(
             request,
             "ia.html",
             active="ia",
             roles=ROLES,
-            providers=PROVIDERS,
+            kinds=KINDS,
+            suggested=SUGGESTED_ADDRESSES,
+            services=service.ai_services.all(),
             current=current,
-            gemini_models=service.ai.cached_models("gemini"),
         )
+
+    # -- I servizi: nome, tipo, indirizzo e chiave, inseriti a mano dall'admin
+
+    @app.post("/ia/servizi")
+    async def ai_service_add(request: Request) -> Response:
+        form = await checked_form(request)
+        try:
+            added = service.ai_services.add(form.get("name", ""), form.get("kind", "openai"), form.get("base_url", ""), form.get("api_key", ""))
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return back("/ia")
+        flash(request, "ok", f"Servizio «{added.name}» aggiunto")
+        # Se una funzione non ha ancora un servizio, parte con questo: basta il primo inserimento per essere operativi.
+        assigned = {f"ai_{role}_service": str(added.id) for role in ROLES if service.ai.slot(role)[0] is None}
+        if assigned:
+            settings.update({**assigned, **{key.replace("_service", "_model"): "" for key in assigned}})
+            flash(request, "info", f"«{added.name}» è ora il servizio principale per: " + ", ".join(ROLES[k.split("_")[1]] for k in assigned))
+        flash_messages(request, await service.ai.refresh_and_pick())
+        return back("/ia")
+
+    @app.get("/ia/servizi/{service_id}")
+    async def ai_service_page(request: Request, service_id: int) -> Response:
+        require_login(request)
+        return page(request, "ia_servizio.html", active="ia", target=find_service(service_id), kinds=KINDS, suggested=SUGGESTED_ADDRESSES)
+
+    @app.post("/ia/servizi/{service_id}")
+    async def ai_service_save(request: Request, service_id: int) -> Response:
+        form = await checked_form(request)
+        find_service(service_id)
+        try:
+            saved = service.ai_services.update(service_id, form.get("name", ""), form.get("kind", "openai"), form.get("base_url", ""), form.get("api_key", ""))
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return back(f"/ia/servizi/{service_id}")
+        flash(request, "ok", f"Servizio «{saved.name}» aggiornato")
+        flash_messages(request, await service.ai.refresh_and_pick())
+        return back("/ia")
+
+    @app.post("/ia/servizi/{service_id}/modelli")
+    async def ai_service_models(request: Request, service_id: int) -> Response:
+        """Chiede al servizio i modelli che ha: serve anche a verificare che indirizzo e chiave siano giusti."""
+        await checked_form(request)
+        target = find_service(service_id)
+        try:
+            ids = await service.ai.refresh_models(service_id)
+            flash(request, "ok", f"{target.name}: {len(ids)} modelli trovati")
+        except NotConfigured:
+            flash(request, "info", f"{target.name}: chiave non impostata, elenco dei modelli non caricato.")
+        except AiError as exc:
+            flash(request, "error", f"{target.name}: {exc.user_message}")
+        return back("/ia")
+
+    @app.post("/ia/servizi/{service_id}/elimina")
+    async def ai_service_remove(request: Request, service_id: int) -> Response:
+        await checked_form(request)
+        removed = find_service(service_id)
+        service.ai_services.remove(service_id)  # le funzioni che lo usavano restano senza servizio
+        flash(request, "ok", f"Servizio «{removed.name}» rimosso")
+        return back("/ia")
+
+    # -- I modelli da usare: per ogni funzione uno principale e uno di riserva
 
     @app.post("/ia")
     async def ai_save(request: Request) -> Response:
-        """Salva chiavi e scelte, poi cerca da solo i modelli disponibili e sceglie dove manca."""
+        """Salva le scelte, poi carica da solo i modelli dei servizi scelti e sceglie dove manca."""
         form = await checked_form(request)
         values: dict[str, str] = {}
-        for key in ("gemini_api_key", "groq_api_key", "deepseek_api_key", "custom_api_key"):
-            secret_field(form, key, values)
-        gemini_model = form.get("gemini_model", "").strip() or settings.get("gemini_model")
-        gemini_fallback = form.get("gemini_fallback_model", "").strip()
-        if not MODEL_NAME.match(gemini_model) or (gemini_fallback and not MODEL_NAME.match(gemini_fallback)):
-            flash(request, "error", "Modello Gemini: inserisci un nome valido, ad esempio gemini-3.8-flash")
-            return back("/ia")
-        values["gemini_model"], values["gemini_fallback_model"] = gemini_model, gemini_fallback
-        base_url = form.get("custom_base_url", "").strip().rstrip("/")
-        if base_url and not BASE_URL.match(base_url):
-            flash(request, "error", "L'indirizzo del servizio deve iniziare con http:// o https://")
-            return back("/ia")
-        values["custom_base_url"] = base_url
         try:
-            context_chars = int(form.get("ai_context_chars", "").strip() or service.settings.get("ai_context_chars"))
+            context_chars = int(form.get("ai_context_chars", "").strip() or settings.get("ai_context_chars"))
         except ValueError:
             context_chars = 0
         if not 2000 <= context_chars <= 200000:
@@ -238,42 +302,30 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             return back("/ia")
         values["ai_context_chars"] = str(context_chars)
         for role in ROLES:
-            provider = form.get(f"ai_{role}_provider", "gemini")
-            if provider not in PROVIDERS:
-                flash(request, "error", "Servizio non valido")
-                return back("/ia")
-            # Cambiando servizio, il modello scritto prima non vale più: si lascia scegliere in automatico.
-            model = ""
-            if provider == service.ai.provider(role):
-                model = form.get(f"ai_{role}_model_manual", "").strip() or form.get(f"ai_{role}_model_select", "").strip()
-            if model and not MODEL_NAME.match(model):
-                flash(request, "error", f"«{ROLES[role]}»: il nome del modello contiene caratteri non validi")
-                return back("/ia")
-            values[f"ai_{role}_provider"], values[f"ai_{role}_model"] = provider, model
+            for backup in (False, True):
+                prefix = service.ai.prefix(role, backup)
+                raw = form.get(f"{prefix}_service", "").strip()
+                chosen = service.ai_services.get(int(raw)) if raw.isdigit() else None
+                if raw and chosen is None:
+                    flash(request, "error", "Servizio non valido")
+                    return back("/ia")
+                # Cambiando servizio, il modello scelto prima non vale più: si lascia scegliere in automatico.
+                model = ""
+                if chosen is not None and str(chosen.id) == settings.get(f"{prefix}_service"):
+                    model = form.get(f"{prefix}_model_manual", "").strip() or form.get(f"{prefix}_model_select", "").strip()
+                if model and not MODEL_NAME.match(model):
+                    flash(request, "error", f"«{ROLES[role]}»: il nome del modello contiene caratteri non validi")
+                    return back("/ia")
+                values[f"{prefix}_service"], values[f"{prefix}_model"] = (str(chosen.id) if chosen else ""), model
         settings.update(values)
-        for text, ok in await service.ai.refresh_and_pick():
-            flash(request, "info" if ok is None else ("ok" if ok else "error"), text)
+        flash_messages(request, await service.ai.refresh_and_pick())
         return back("/ia")
 
     @app.post("/ia/auto")
     async def ai_repick(request: Request) -> Response:
         """Scelta automatica da capo: utile se un modello scelto prima non legge le immagini."""
         await checked_form(request)
-        for text, ok in await service.ai.repick():
-            flash(request, "info" if ok is None else ("ok" if ok else "error"), text)
-        return back("/ia")
-
-    @app.post("/ia/prova-gemini")
-    async def ai_probe_gemini(request: Request) -> Response:
-        """Prova del modello principale e di quello di riserva di Gemini, con il motivo esatto se falliscono."""
-        await checked_form(request)
-        try:
-            results = await service.gemini.check()
-        except GeminiError as exc:
-            flash(request, "error", exc.user_message)
-            return back("/ia")
-        for label, ok, detail in results:
-            flash(request, "ok" if ok else "error", f"{label}: {'funziona' if ok else detail}")
+        flash_messages(request, await service.ai.repick())
         return back("/ia")
 
     @app.post("/ia/prova/{role}")
@@ -281,8 +333,8 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         await checked_form(request)
         if role not in ROLES:
             raise HTTPException(status_code=404)
-        label, ok, detail = await service.ai.probe(role)
-        flash(request, "ok" if ok else "error", f"{label}: {detail}")
+        for label, ok, detail in await service.ai.probe(role):
+            flash(request, "ok" if ok else "error", f"{label}: {detail}")
         return back("/ia")
 
     # --- Utenti ------------------------------------------------------------------

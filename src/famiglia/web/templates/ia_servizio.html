@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Servizio AI{% endblock %}
+{% block content %}
+<h1>Servizio: {{ target.name }}</h1>
+<form method="post" action="/ia/servizi/{{ target.id }}" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="name">Nome</label>
+  <input id="name" name="name" type="text" maxlength="40" value="{{ target.name }}" required>
+  <label for="kind">Tipo</label>
+  <select id="kind" name="kind">
+    {% for key, label in kinds.items() %}<option value="{{ key }}" {{ 'selected' if target.kind == key }}>{{ label }}</option>{% endfor %}
+  </select>
+  <label for="base_url">Indirizzo <span class="hint">(solo per i servizi compatibili OpenAI)</span></label>
+  <input id="base_url" name="base_url" type="text" list="indirizzi" value="{{ target.base_url }}" autocomplete="off" placeholder="https://…/v1">
+  <datalist id="indirizzi">{% for label, url in suggested %}<option value="{{ url }}">{{ label }}</option>{% endfor %}</datalist>
+  <label for="api_key">Chiave API {% if target.has_key %}<span class="badge ok">impostata</span>{% endif %}</label>
+  <input id="api_key" name="api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if target.has_key else '' }}">
+  <div class="hint">Cambiando indirizzo o tipo l'elenco dei modelli si aggiorna da solo. Le funzioni che usano questo servizio lo mantengono.</div>
+  <div class="actions"><button class="primary">Salva</button> <a href="/ia"><button type="button">Annulla</button></a></div>
+</form>
+
+<form method="post" action="/ia/servizi/{{ target.id }}/elimina" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2>Rimuovi il servizio</h2>
+  <p class="hint">Le funzioni che lo usano restano senza servizio finché non ne scegli un altro. La chiave salvata viene cancellata.</p>
+  <div class="actions"><button class="danger" onclick="return confirm('Rimuovere {{ target.name }}?')">Rimuovi</button></div>
+</form>
+{% endblock %}

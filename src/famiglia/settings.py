@@ -8,7 +8,6 @@ from typing import Callable
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from .ai import PROVIDERS, ROLES
 from .db import Database
 
 DEFAULTS: dict[str, str] = {
@@ -19,17 +18,29 @@ DEFAULTS: dict[str, str] = {
     "gemini_model": "gemini-3.8-flash",
     # Se il modello principale ha finito la quota o non risponde, si prova questo (vuoto = nessuno)
     "gemini_fallback_model": "gemini-3.5-flash-lite",
-    # Intelligenza artificiale per funzione: provider (gemini, groq, deepseek, custom) e modello
-    "ai_docs_provider": "gemini",
+    # Intelligenza artificiale: per ogni funzione (docs, chat) un servizio e un modello principali, e una riserva.
+    # I servizi (nome, tipo, indirizzo, chiave cifrata) stanno nella tabella ai_services.
+    "ai_docs_service": "",
     "ai_docs_model": "",
-    "ai_chat_provider": "gemini",
+    "ai_docs_backup_service": "",
+    "ai_docs_backup_model": "",
+    "ai_chat_service": "",
     "ai_chat_model": "",
+    "ai_chat_backup_service": "",
+    "ai_chat_backup_model": "",
+    "ai_context_chars": "9000",  # dati inviati a ogni domanda con i servizi diversi da Gemini (limiti di token bassi)
+    "ai_migrated": "",
+    # Impostazioni delle versioni precedenti: si leggono una volta sola per passarle ai servizi, poi si svuotano.
+    "gemini_api_key": "",
+    "gemini_model": "gemini-3.8-flash",
+    "gemini_fallback_model": "",
     "groq_api_key": "",
     "deepseek_api_key": "",
     "custom_api_key": "",
     "custom_base_url": "",
-    "ai_context_chars": "9000",  # dati inviati a ogni domanda con i servizi diversi da Gemini (limiti di token bassi)
-    "ai_models_cache": "",  # elenco dei modelli per provider, ricavato dal provider stesso (JSON)
+    "ai_docs_provider": "gemini",
+    "ai_chat_provider": "gemini",
+    "ai_models_cache": "",
     # Composio (Google Calendar)
     "composio_api_key": "",
     # Utente che riceve sul proprio calendario le visite di tutta la famiglia (id dell'utente; vuoto = nessuno)
@@ -74,6 +85,16 @@ class Settings:
                 return ""
         return value
 
+    def encrypt(self, value: str) -> str:
+        """Cifra un testo con la stessa chiave dei segreti (per le chiavi dei servizi AI)."""
+        return self._fernet.encrypt(value.encode()).decode() if value else ""
+
+    def decrypt(self, token: str) -> str:
+        try:
+            return self._fernet.decrypt(token.encode()).decode() if token else ""
+        except InvalidToken:
+            return ""
+
     def is_set(self, key: str) -> bool:
         return bool(self.get(key))
 
@@ -101,17 +122,5 @@ class Settings:
         self._listeners.append(listener)
 
     def missing_for_run(self) -> list[str]:
-        """Cosa manca per partire: il token e la chiave di ogni servizio AI effettivamente scelto."""
-        missing = [label for key, label in REQUIRED_FOR_RUN.items() if not self.is_set(key)]
-        seen: set[str] = set()
-        for role in ROLES:
-            provider = self.get(f"ai_{role}_provider")
-            provider = provider if provider in PROVIDERS else "gemini"
-            if provider in seen:
-                continue
-            seen.add(provider)
-            if not self.is_set(f"{provider}_api_key"):
-                missing.append(f"Chiave di {PROVIDERS[provider]['label']}")
-            if provider == "custom" and not self.is_set("custom_base_url"):
-                missing.append("Indirizzo del servizio compatibile OpenAI")
-        return missing
+        """Cosa manca a livello di impostazioni semplici; Service aggiunge quello dei servizi AI."""
+        return [label for key, label in REQUIRED_FOR_RUN.items() if not self.is_set(key)]

@@ -17,8 +17,7 @@ from google.genai import errors, types
 from pydantic import BaseModel, Field
 
 from . import clock
-from .ai import AiError, NotConfigured, tiny_png
-from .settings import Settings
+from .ai import AiError, Endpoint, NotConfigured, tiny_png
 
 log = logging.getLogger(__name__)
 
@@ -114,14 +113,6 @@ QUOTA_MESSAGES = {
 BUSY_MESSAGE = "Gemini è molto occupato in questo momento. Riprova tra un minuto."
 
 
-class _TryNextModel(Exception):
-    """Questo modello non può rispondere ora (quota, non esiste, non risponde): si prova quello di riserva."""
-
-    def __init__(self, error: "GeminiError") -> None:
-        super().__init__(str(error))
-        self.error = error
-
-
 class LabResult(BaseModel):
     name: str = Field(description="Nome dell'analisi o del parametro, ad esempio Glicemia")
     value: str = Field(description="Valore esattamente come scritto sul documento, ad esempio 95 oppure 5,4")
@@ -202,53 +193,34 @@ class DocumentReader(Protocol):
 
 
 class Gemini:
-    def __init__(
-        self,
-        settings: Settings,
-        http_client: httpx.AsyncClient | None = None,
-        log: Callable[[str, str], None] | None = None,
-    ) -> None:
-        self._settings = settings
+    """Parla con Google Gemini. Non conosce le impostazioni: chiave e modello arrivano da un Endpoint."""
+
+    def __init__(self, http_client: httpx.AsyncClient | None = None, log: Callable[[str, str], None] | None = None) -> None:
         self._http_client = http_client
         self._log = log or (lambda kind, detail: None)
-        self._client: genai.Client | None = None
-        self._client_key = ""
+        self._clients: dict[str, genai.Client] = {}
         self._slots = asyncio.Semaphore(MAX_PARALLEL_CALLS)
         self._sleep = asyncio.sleep  # sostituibile nei test
 
-    def _client_for_current_key(self) -> genai.Client:
-        key = self._settings.get("gemini_api_key")
-        if not key:
-            raise GeminiNotConfigured("Il bot non è ancora configurato (manca la chiave Gemini). Avvisa chi lo gestisce.")
-        if self._client is None or key != self._client_key:
+    def _client(self, endpoint: Endpoint) -> genai.Client:
+        if not endpoint.api_key:
+            raise GeminiNotConfigured(f"{endpoint.label} non è configurato: manca la chiave. Avvisa chi gestisce il bot.")
+        if endpoint.api_key not in self._clients:
             options = types.HttpOptions(httpx_async_client=self._http_client) if self._http_client else None
-            self._client = genai.Client(api_key=key, http_options=options)
-            self._client_key = key
-        return self._client
+            self._clients[endpoint.api_key] = genai.Client(api_key=endpoint.api_key, http_options=options)
+        return self._clients[endpoint.api_key]
 
-    async def _generate(self, contents: list, config: types.GenerateContentConfig, model: str | None = None) -> str:
-        client = self._client_for_current_key()
-        primary = model or self._settings.get("gemini_model")
-        fallback = self._settings.get("gemini_fallback_model")
-        models = [primary] + ([fallback] if fallback and fallback != primary else [])
-        failures: list[GeminiError] = []
-        for model in models:
-            try:
-                text = await self._call_model(client, model, contents, config)
-            except _TryNextModel as skip:
-                failures.append(skip.error)
-                self._log("errore", f"Gemini, modello {model}: {skip.error}")
-                continue
-            if failures:
-                self._log("errore", f"Modello {primary} non disponibile, ho risposto con {model}")
-            return text
-        raise failures[0]  # il messaggio più utile è quello del modello scelto dall'utente
+    async def _generate(self, endpoint: Endpoint, contents: list, config: types.GenerateContentConfig) -> str:
+        """Una richiesta al modello dell'endpoint, con attesa e nuovo tentativo solo per i limiti al minuto.
 
-    async def _call_model(self, client: genai.Client, model: str, contents: list, config) -> str:
+        Se il modello non può rispondere (quota finita, non esiste, non risponde) si solleva l'errore:
+        cambiare modello o servizio è compito del router, con la riserva scelta dall'admin.
+        """
+        client = self._client(endpoint)
         for attempt in range(MAX_RETRIES + 1):
             try:
                 async with self._slots:
-                    response = await client.aio.models.generate_content(model=model, contents=contents, config=config)
+                    response = await client.aio.models.generate_content(model=endpoint.model, contents=contents, config=config)
             except errors.APIError as exc:
                 detail = f"{exc.code} {exc.status}: {exc.message}"
                 if exc.code == 429:
@@ -257,12 +229,9 @@ class Gemini:
                         detail += f" [{quota.summary}]"
                     wait = wait_before_retry(quota, attempt)
                     if wait is None:
-                        error = GeminiError(QUOTA_MESSAGES.get(quota.kind, BUSY_MESSAGE), detail, quota=True)
-                        raise _TryNextModel(error) from exc
+                        raise GeminiError(QUOTA_MESSAGES.get(quota.kind, BUSY_MESSAGE), detail, quota=True) from exc
                     await self._sleep(wait + 1)  # limite al minuto: basta aspettare
                     continue
-                if exc.code == 404 or (exc.code or 0) >= 500:
-                    raise _TryNextModel(GeminiError(_friendly(exc), detail)) from exc
                 raise GeminiError(_friendly(exc), detail) from exc
             except (httpx.HTTPError, OSError) as exc:
                 raise GeminiError("Non riesco a collegarmi a Gemini: controlla la connessione e riprova.", repr(exc)) from exc
@@ -272,7 +241,7 @@ class Gemini:
             return text
         raise AssertionError("il ciclo termina sempre con un ritorno o un errore")  # pragma: no cover
 
-    async def analyze_document(self, data: bytes, mime: str, model: str | None = None) -> Extraction:
+    async def analyze_document(self, endpoint: Endpoint, data: bytes, mime: str) -> Extraction:
         config = types.GenerateContentConfig(
             system_instruction=ANALYZE_INSTRUCTIONS,
             response_mime_type="application/json",
@@ -282,9 +251,7 @@ class Gemini:
         )
         today = clock.now().strftime("%Y-%m-%d")
         text = await self._generate(
-            [types.Part.from_bytes(data=data, mime_type=mime), f"Oggi è il {today}. Analizza il documento."],
-            config,
-            model,
+            endpoint, [types.Part.from_bytes(data=data, mime_type=mime), f"Oggi è il {today}. Analizza il documento."], config
         )
         try:
             return Extraction.model_validate_json(text)
@@ -292,15 +259,14 @@ class Gemini:
             log.warning("Risposta Gemini non valida: %s", exc)
             raise GeminiError("Non sono riuscito a interpretare il documento. Riprova con una foto più nitida.") from exc
 
-
     async def answer(
         self,
+        endpoint: Endpoint,
         context: str,
         sender_name: str,
         question: str | None = None,
         audio: bytes | None = None,
         audio_mime: str = "",
-        model: str | None = None,
     ) -> str:
         """Risponde a una domanda scritta o vocale, sui dati salvati e con le conoscenze generali del modello."""
         intro = f"Oggi è il {clock.now().strftime('%Y-%m-%d')}. Scrive {sender_name}.\n\nDATI DELLA FAMIGLIA:\n{context}\n\n"
@@ -308,19 +274,16 @@ class Gemini:
             contents = [intro + "La domanda è nel messaggio vocale.", types.Part.from_bytes(data=audio, mime_type=audio_mime)]
         else:
             contents = [intro + f"Domanda: {question}"]
-        return (await self._generate(contents, self._consult_config(), model)).strip()
-
-    @staticmethod
-    def _consult_config() -> types.GenerateContentConfig:
-        return types.GenerateContentConfig(
+        config = types.GenerateContentConfig(
             system_instruction=CONSULT_INSTRUCTIONS,
             temperature=0.3,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
+        return (await self._generate(endpoint, contents, config)).strip()
 
-    async def list_models(self) -> list[str]:
+    async def list_models(self, endpoint: Endpoint) -> list[str]:
         """I modelli che Google mette a disposizione di questa chiave e che sanno generare testo."""
-        client = self._client_for_current_key()
+        client = self._client(endpoint)
         try:
             ids = [
                 model.name.removeprefix("models/")
@@ -333,44 +296,27 @@ class Gemini:
             raise GeminiError("Non riesco a collegarmi a Gemini: controlla la connessione e riprova.", repr(exc)) from exc
         return sorted(ids)
 
-    async def probe_model(self, model: str, image: bool = False) -> tuple[bool, str]:
-        """Prova di un solo modello; con image=True verifica anche che accetti le immagini."""
+    async def probe(self, endpoint: Endpoint, role: str) -> tuple[bool, str]:
+        """Prova reale e minima; per i documenti manda anche un'immagine. Se fallisce dice perché (quota compresa)."""
         try:
-            client = self._client_for_current_key()
-        except GeminiError as exc:
+            client = self._client(endpoint)
+        except GeminiNotConfigured as exc:
             return False, exc.user_message
-        config = types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         contents: list = ["Rispondi solo con la parola: ok"]
-        if image:
+        if role == "docs":
             contents.append(types.Part.from_bytes(data=tiny_png(), mime_type="image/png"))
-        _, ok, detail = await self._probe(client, model, model, config, contents)
-        return ok, "funziona" if ok else detail
-
-    async def check(self) -> list[tuple[str, bool, str]]:
-        """Prova reale, una richiesta per volta: dice quali modelli funzionano e, se no, perché."""
-        client = self._client_for_current_key()
-        primary = self._settings.get("gemini_model")
-        fallback = self._settings.get("gemini_fallback_model")
-        plain = types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
-        probes = [(f"Modello principale ({primary})", primary, plain)]
-        if fallback and fallback != primary:
-            probes.append((f"Modello di riserva ({fallback})", fallback, plain))
-        return [await self._probe(client, label, model, config) for label, model, config in probes]
-
-    async def _probe(
-        self, client: genai.Client, label: str, model: str, config, contents: list | str = "Rispondi solo con la parola: ok"
-    ) -> tuple[str, bool, str]:
+        config = types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         try:
             async with self._slots:
-                await client.aio.models.generate_content(model=model, contents=contents, config=config)
+                await client.aio.models.generate_content(model=endpoint.model, contents=contents, config=config)
         except errors.APIError as exc:
             detail = f"{exc.code} {exc.status}: {exc.message}"
             if exc.code == 429 and (quota := classify_quota(exc)).summary:
                 detail += f" [{quota.summary}]"
-            return label, False, detail
+            return False, detail
         except (httpx.HTTPError, OSError) as exc:
-            return label, False, f"connessione: {exc!r}"
-        return label, True, "ok"
+            return False, f"connessione: {exc!r}"
+        return True, "funziona"
 
 
 def _friendly(exc: errors.APIError) -> str:

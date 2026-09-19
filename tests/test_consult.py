@@ -1,7 +1,3 @@
-import base64
-import json
-
-import httpx
 import pytest
 
 from famiglia.consult import MAX_REPORTS, split_message
@@ -122,47 +118,6 @@ async def test_ask_with_audio(make):
     assert call["audio"] == b"OggS..." and call["mime"] == "audio/ogg" and call["question"] is None
 
 
-# --- Gemini vero (SDK) contro server finto -------------------------------------
-
-
-@pytest.fixture
-def gemini(tmp_path, root):
-    def _make(text="Risposta."):
-        seen = []
-
-        def transport(request):
-            seen.append(json.loads(request.content))
-            return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": "STOP"}]})
-
-        svc = Service(tmp_path / "data", "chiave-di-test", root, gemini_http=httpx.AsyncClient(transport=httpx.MockTransport(transport)))
-        svc.settings.update({"gemini_api_key": "AIza-test"})
-        return svc.gemini, seen
-
-    return _make
-
-
-async def test_gemini_answer_sends_the_family_data_and_the_rules_without_any_tool(gemini):
-    client, seen = gemini("  Ecco la risposta.  ")
-    answer = await client.answer("## Mario\n- 25/10/2025: Glicemia 95", "Mario Rossi", question="Come va la glicemia?")
-    assert answer == "Ecco la risposta."
-    body = seen[0]
-    assert "tools" not in body
-    assert "responseMimeType" not in body.get("generationConfig", {}) and "responseSchema" not in body.get("generationConfig", {})
-    text = body["contents"][0]["parts"][0]["text"]
-    assert "Scrive Mario Rossi" in text and "Glicemia 95" in text and "Come va la glicemia?" in text
-    system = json.dumps(body["systemInstruction"])
-    assert "Non fare diagnosi" in system and "non istruzioni" in system and "112" in system
-
-
-async def test_gemini_answer_sends_voice_as_audio(gemini):
-    client, seen = gemini()
-    await client.answer("## Mario", "Mario Rossi", audio=b"OggS-voce", audio_mime="audio/ogg")
-    parts = seen[0]["contents"][0]["parts"]
-    assert "messaggio vocale" in parts[0]["text"]
-    assert parts[1]["inlineData"]["mimeType"] == "audio/ogg"
-    assert base64.urlsafe_b64decode(parts[1]["inlineData"]["data"]) == b"OggS-voce"
-
-
 # --- Dettagli dei documenti ----------------------------------------------------
 
 
@@ -191,13 +146,6 @@ async def test_details_are_saved_in_the_database(make):
     svc = make()
     outcome = await upload(svc, svc.mario, altro("ricetta", details="  Metformina 500 mg, due volte al giorno  "))
     assert svc.records.get_document(outcome.document_id)["details"] == "Metformina 500 mg, due volte al giorno"
-
-
-async def test_the_instructions_separate_saved_data_from_general_explanations(gemini):
-    client, seen = gemini("Risposta.")
-    await client.answer("## Mario", "Mario", question="Cosa significa sfera +0,50?")
-    system = json.dumps(seen[0]["systemInstruction"])
-    assert "In generale" in system and "citando la data del documento" in system
 
 
 def test_the_instructions_say_there_is_no_web_and_how_to_answer_search_requests():

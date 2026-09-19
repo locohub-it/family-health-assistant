@@ -15,7 +15,9 @@ from .db import Database
 from .documents import DEFAULT_DOCUMENTS_DIR, DocumentService
 from .gemini import DocumentReader, Gemini
 from .openai_compat import OpenAICompat
+from .ai import ROLES
 from .router import AiRouter
+from .services import AiServices
 from .records import Records
 from .settings import BOT_KEYS, Settings
 from .storage import Storage, StorageError
@@ -40,9 +42,11 @@ class Service:
         self.storage = Storage(storage_root)
         self.fallback_storage = Storage(Path(data_dir) / "documenti")  # nel volume dei dati: sempre disponibile
         self.records = Records(self.db)
-        self.gemini = Gemini(self.settings, gemini_http, self.log)
+        self.ai_services = AiServices(self.db, self.settings)
+        self.ai_services.migrate_legacy()  # passa a "servizi" la configurazione AI delle versioni precedenti
+        self.gemini = Gemini(gemini_http, self.log)
         self.openai = OpenAICompat(ai_http)
-        self.ai = AiRouter(self.settings, self.gemini, self.openai, self.log)
+        self.ai = AiRouter(self.ai_services, self.settings, self.gemini, self.openai, self.log)
         self.calendar = Calendar(self.settings, composio_factory)
         self.documents = DocumentService(
             self.settings, self.users, self.storage, self.records, reader or self.ai, self.log, self.calendar, self.fallback_storage
@@ -54,6 +58,19 @@ class Service:
     def _settings_changed(self, keys: set[str]) -> None:
         if keys & BOT_KEYS:
             self.bot.restart()
+
+    def missing_for_run(self) -> list[str]:
+        """Cosa manca per partire: il token del bot e, per ogni funzione, un servizio AI con la sua chiave e un modello."""
+        missing = self.settings.missing_for_run()
+        for role, label in ROLES.items():
+            service, model = self.ai.slot(role)
+            if service is None:
+                missing.append(f"Servizio AI per «{label}»")
+            elif service.kind == "gemini" and not service.has_key:
+                missing.append(f"Chiave di {service.name}")
+            elif not model:
+                missing.append(f"Modello per «{label}»")
+        return missing
 
     def ensure_default_folder(self) -> None:
         """Crea «Documenti» nella radice, così esiste e si vede già nel selettore."""

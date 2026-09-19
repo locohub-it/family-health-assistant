@@ -13,7 +13,7 @@
 <div class="grid">
   <div class="card">
     <h2>Intelligenza artificiale</h2>
-    {% for label, provider, model in ai_summary %}<p>{{ label }}: <b>{{ provider }}</b> <span class="hint">{{ model or 'modello da scegliere' }}</span></p>{% endfor %}
+    {% for label, primary, backup in ai_summary %}<p>{{ label }}: <b>{{ primary }}</b>{% if backup %}<br><span class="hint">riserva: {{ backup }}</span>{% endif %}</p>{% endfor %}
     <p class="hint"><a href="/ia">Cambia servizio o modello</a></p>
   </div>
   <div class="card">

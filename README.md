@@ -8,28 +8,28 @@ che l'utente scriva nulla.
   della persona giusta.
 - **Referto di analisi** (es. «esami del 25/10/2025») → salva i valori nel database.
 - **Domanda in chat** («in base all'ultimo referto, cosa comportano quei valori?») → il bot passa
-  alla consultazione: legge lo storico della persona e chiede a **Gemini** di valutarlo.
+  alla consultazione: legge lo storico della persona e chiede a un **modello AI** (a scelta dell'admin) di valutarlo.
 
 Tutto si configura da una **pagina web**: chiavi API, utenti (con il loro calendario) e cartella
 in cui salvare i documenti.
 
 > **Stato: pronto per la prima prova.**
-> Pannello di configurazione; bot Telegram che legge foto e PDF con Gemini e salva referti,
+> Pannello di configurazione; bot Telegram che legge foto e PDF con il modello AI scelto e salva referti,
 > appuntamenti, ricette e altri documenti (con «Annulla»); visite sul Google Calendar di ciascuno
-> tramite Composio; domande scritte o a voce con risposta di Gemini sui dati salvati.
-> Testato con Gemini, Telegram e Composio simulati: la prima prova con le chiavi vere è da fare.
+> tramite Composio; domande scritte o a voce con risposta del modello AI sui dati salvati.
+> Testato con servizi AI, Telegram e Composio simulati.
 
 ## Come funziona
 
 ```
-foto ─> bot Telegram (long polling) ─> solo ID approvati ─> Gemini decide il tipo di documento
+foto ─> bot Telegram (long polling) ─> solo ID approvati ─> il modello AI decide il tipo di documento
                                                               ├─ prenotazione ─> DB + Google Calendar (Composio)
                                                               ├─ referto      ─> DB + foto nella cartella scelta
                                                               └─ ricetta/altro ─> DB + foto
 domanda ─> dati della persona dal DB ─> modello AI scelto (Gemini, Groq…) ─> risposta in italiano
 ```
 
-- **Domande**: un messaggio scritto o un vocale è una domanda. Gemini riceve lo storico di chi scrive
+- **Domande**: un messaggio scritto o un vocale è una domanda. Il modello riceve lo storico di chi scrive
   (e dei familiari per cui ha inviato documenti, non degli altri) e risponde in italiano semplice,
   distinguendo ciò che legge nei documenti dalle spiegazioni generali («In generale…»). Il bot **non
   cerca sul web** e non conosce la posizione di nessuno: a «l'oculista più vicino» risponde che non può
@@ -42,7 +42,7 @@ domanda ─> dati della persona dal DB ─> modello AI scelto (Gemini, Groq…) 
 
 ## Privacy
 
-Le foto dei referti vengono inviate a Gemini. Sul **piano gratuito** dell'API Google può usare i
+Le foto dei referti vengono inviate al servizio AI scelto. Con **Gemini**, sul **piano gratuito** dell'API Google può usare i
 contenuti inviati per migliorare i suoi prodotti: per dati sanitari conviene un progetto Google
 Cloud con **fatturazione attiva**, dove i dati non vengono usati per l'addestramento. I documenti
 restano sul tuo server, nella cartella che scegli; il database sta nel volume del container.
@@ -55,8 +55,8 @@ la sua sede. Controlla le condizioni prima di usare dati sanitari veri; un servi
 ## Cosa serve
 
 1. **Bot Telegram**: crealo con @BotFather (`/newbot`) e copia il token.
-2. **Chiave di un servizio AI**: Gemini da <https://aistudio.google.com/apikey>, oppure Groq, DeepSeek o
-   un servizio compatibile OpenAI.
+2. **Un servizio AI** con la sua chiave: Gemini (<https://aistudio.google.com/apikey>), Groq, DeepSeek o
+   qualunque servizio compatibile OpenAI. Si inseriscono dal pannello, a mano, quanti se ne vuole.
 3. **Chiave Composio** (per Google Calendar): la **Project API key** (`ak_…`) da <https://platform.composio.dev>,
    nelle impostazioni del progetto. Non la chiave `ck_…` (consumer, per MCP): il pannello la rifiuta. Ogni persona
    collega il proprio account Google dal pannello.
@@ -92,18 +92,25 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
 ## Primo avvio dal pannello
 
 1. **Chiavi API**: token del bot Telegram e chiave Composio.
-   **Modelli IA**: le chiavi dei servizi AI e la scelta del modello per ogni funzione (lettura dei
-   documenti, domande). Gemini è il predefinito; in alternativa **Groq**, **DeepSeek** o uno
-   qualsiasi compatibile OpenAI (OpenRouter, Ollama sul tuo server…). Inserita la chiave, basta
-   scegliere il servizio: la lista dei modelli si carica da sola (con una finestra di attesa se
-   serve) e il pannello sceglie quello adatto; si può cambiare dal menu o scrivere il nome a mano.
-   Per i documenti prova i modelli con un'immagine e tiene il primo che la legge. **Prova** verifica
-   un modello; **Prova Gemini** mostra l'esito del modello principale e di quello di riserva, con la
-   quota esatta se falliscono. Con Gemini il **modello di riserva** entra in azione da solo se quello
-   principale ha finito le richieste; il bot aspetta e riprova se il limite è al minuto (e non aspetta
-   invano se la quota è finita). Con Groq i vocali si trascrivono con Whisper, i PDF con testo si
-   leggono con qualsiasi modello, e con i limiti di token bassi (il piano gratuito ammette circa 8.000
-   token al minuto) a ogni domanda si inviano solo i documenti più recenti, entro un tetto regolabile.
+2. **Modelli IA** (tre riquadri):
+   1. **Servizi AI**: inserisci a mano nome, tipo, indirizzo e chiave di ogni servizio che possiedi
+      (Gemini, Groq, DeepSeek, OpenRouter, Ollama sul tuo server, qualunque servizio compatibile
+      OpenAI, anche futuro). Le chiavi sono salvate cifrate. Il primo servizio diventa quello di
+      tutte le funzioni, così si parte subito.
+   2. **Modelli da usare**: per la lettura dei documenti e per le risposte scegli un modello
+      **principale** e, se vuoi, uno di **riserva**, anche di un altro servizio (per esempio
+      principale su Groq e riserva su Gemini). La riserva risponde quando la principale non può:
+      limite finito, errore, servizio giù. Scegliendo un servizio, la lista dei modelli si carica da
+      sola (con una finestra di attesa se serve) e il pannello sceglie quello adatto; per i documenti
+      prova i modelli con un'immagine e tiene il primo che la legge. Si può cambiare dal menu o
+      scrivere il nome a mano; un modello scelto non viene mai sostituito.
+   3. **Verifica**: «Prova» fa una richiesta vera al modello principale e a quello di riserva e
+      mostra l'esito con il motivo esatto se falliscono; «Scegli di nuovo in automatico» rifà la scelta.
+
+   Con Groq i vocali si trascrivono con Whisper e con i limiti di token bassi (il piano gratuito
+   ammette circa 8.000 token al minuto) a ogni domanda si inviano solo i documenti più recenti, entro
+   un tetto regolabile. I PDF con testo si leggono con qualsiasi modello. Chi aggiorna da una
+   versione precedente ritrova chiavi e scelte già fatte: vengono trasformate in servizi da sole.
 2. **Cartella** (facoltativo): senza scegliere niente il bot salva in `Documenti`, dentro
    `STORAGE_ROOT`, e la crea da solo. Per cambiarla, sfoglia dentro `STORAGE_ROOT`, crea una
    cartella se serve e scegli «Usa questa cartella» (il pannello controlla che si possa

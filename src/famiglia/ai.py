@@ -21,13 +21,16 @@ class NotConfigured(AiError):
     """Manca la chiave o l'indirizzo: non è un guasto, è una cosa ancora da inserire."""
 
 
-# Il provider «gemini» usa l'SDK di Google; gli altri parlano il formato compatibile OpenAI.
-PROVIDERS: dict[str, dict[str, str]] = {
-    "gemini": {"label": "Google Gemini", "base_url": ""},
-    "groq": {"label": "Groq", "base_url": "https://api.groq.com/openai/v1"},
-    "deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com"},
-    "custom": {"label": "Altro (compatibile OpenAI)", "base_url": ""},
-}
+# Tipi di servizio: Gemini usa l'SDK di Google, tutti gli altri parlano il formato compatibile OpenAI.
+KINDS: dict[str, str] = {"openai": "Compatibile OpenAI", "gemini": "Google Gemini"}
+# Solo suggerimenti per l'indirizzo: l'admin inserisce a mano nome e chiave di qualunque servizio.
+SUGGESTED_ADDRESSES: tuple[tuple[str, str], ...] = (
+    ("Groq", "https://api.groq.com/openai/v1"),
+    ("DeepSeek", "https://api.deepseek.com"),
+    ("OpenRouter", "https://openrouter.ai/api/v1"),
+    ("OpenAI", "https://api.openai.com/v1"),
+    ("Ollama sul tuo server", "http://localhost:11434/v1"),
+)
 
 # Le due funzioni per cui si sceglie un modello: leggere i documenti (serve la visione) e rispondere alle domande.
 ROLES: dict[str, str] = {"docs": "Lettura dei documenti", "chat": "Domande e risposte"}
@@ -35,7 +38,7 @@ ROLES: dict[str, str] = {"docs": "Lettura dei documenti", "chat": "Domande e ris
 
 @dataclass(frozen=True)
 class Endpoint:
-    provider: str
+    kind: str  # "gemini" | "openai"
     label: str
     base_url: str
     api_key: str
