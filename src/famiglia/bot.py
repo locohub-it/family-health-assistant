@@ -114,11 +114,13 @@ class BotRunner:
         # Il cancello sta nel gruppo -1: se non passa, nessun altro handler vede l'aggiornamento.
         app.add_handler(TypeHandler(Update, self._gate), group=-1)
         app.add_handler(CommandHandler("start", self._start))
-        app.add_handler(CommandHandler("calendario", self._connect_calendar))
+        app.add_handler(CommandHandler(["calendario", "calendar"], self._connect_calendar))
         app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self._voice))
         app.add_handler(CallbackQueryHandler(self._undo, pattern=f"^{UNDO_PREFIX}"))
+        # Per ultimo: un comando sconosciuto non deve cadere nel vuoto senza risposta.
+        app.add_handler(MessageHandler(filters.COMMAND, self._unknown_command))
         app.add_error_handler(self._error)
 
     # --- Sicurezza ---------------------------------------------------------------
@@ -159,6 +161,13 @@ class BotRunner:
         await message.reply_text(
             "Per collegare il tuo Google Calendar apri questo link e accedi con il tuo account Google:\n" + link
         )
+
+    async def _unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if self._approved(update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "Questo comando non lo conosco. Per collegare il calendario scrivi /calendario; "
+                "altrimenti mandami la foto di un documento o scrivimi una domanda."
+            )
 
     async def _text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Un messaggio scritto è una domanda: passa alla consultazione."""

@@ -49,7 +49,8 @@ restano sul tuo server, nella cartella che scegli; il database sta nel volume de
 
 1. **Bot Telegram**: crealo con @BotFather (`/newbot`) e copia il token.
 2. **Chiave Gemini** da <https://aistudio.google.com/apikey>.
-3. **Chiave Composio** da <https://platform.composio.dev> (per Google Calendar). Ogni persona
+3. **Chiave Composio** (per Google Calendar): la **Project API key** (`ak_…`) da <https://platform.composio.dev>,
+   nelle impostazioni del progetto. Non la chiave `ck_…` (consumer, per MCP): il pannello la rifiuta. Ogni persona
    collega il proprio account Google dal pannello.
 4. L'**ID Telegram** di ciascun utente: basta scrivere a @userinfobot.
 

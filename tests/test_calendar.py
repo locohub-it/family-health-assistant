@@ -185,3 +185,39 @@ async def test_undo_still_removes_the_document_if_the_calendar_fails(make):
     message = await svc.documents.undo(svc.mario, outcome.document_id)
     assert "va cancellata a mano" in message
     assert svc.db.execute("SELECT * FROM documents") == []
+
+
+# --- Chiave Composio sbagliata -------------------------------------------------
+
+
+class AuthenticationError(Exception):
+    """Come composio_client.AuthenticationError: porta lo status HTTP."""
+
+    status_code = 401
+
+
+async def test_invalid_composio_key_gets_a_clear_message_with_the_real_detail(make):
+    composio = FakeComposio()
+
+    def refuse(**kwargs):
+        raise AuthenticationError("Error code: 401 - {'error': {'message': 'Invalid API key: ck_**Tf9l'}}")
+
+    composio.connected_accounts.list = refuse
+    svc = make(composio)
+    with pytest.raises(CalendarError) as exc:
+        await svc.calendar.is_connected(svc.mario)
+    assert "chiave Composio non è valida" in exc.value.user_message and "ak_" in exc.value.user_message
+    assert "Invalid API key: ck_**Tf9l" in str(exc.value)  # il dettaglio resta per il pannello
+
+
+async def test_a_403_permission_error_gets_the_same_clear_message(make):
+    composio = FakeComposio()
+
+    class Forbidden(Exception):
+        status_code = 403
+
+    composio.toolkits.authorize = lambda **kw: (_ for _ in ()).throw(Forbidden("no"))
+    svc = make(composio)
+    with pytest.raises(CalendarError) as exc:
+        await svc.calendar.connect_link(svc.mario)
+    assert "non ha i permessi" in exc.value.user_message and "Forbidden: no" in str(exc.value)

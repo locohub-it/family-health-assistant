@@ -375,3 +375,29 @@ def test_voice_and_text_handlers_are_registered_behind_the_gate(asker):
     app = Application.builder().token("1:abc").build()
     asker.bot._register(app)
     assert len(app.handlers[-1]) == 1 and len(app.handlers[0]) >= 5
+
+
+# --- Comandi -------------------------------------------------------------------
+
+
+def test_calendar_command_answers_to_both_names_and_unknown_commands_are_caught_last(svc):
+    from telegram.ext import Application, CommandHandler, MessageHandler
+
+    app = Application.builder().token("1:abc").build()
+    svc.bot._register(app)
+    handlers = app.handlers[0]
+    commands = [h for h in handlers if isinstance(h, CommandHandler)]
+    assert {c for h in commands for c in h.commands} >= {"start", "calendario", "calendar"}
+    assert isinstance(handlers[-1], MessageHandler)  # il generico per ultimo, o coprirebbe i comandi veri
+
+
+async def test_unknown_command_gets_an_answer_instead_of_silence(svc):
+    message = Replies()
+    await svc.bot._unknown_command(command_update(111, message), None)
+    assert "/calendario" in message.texts[0]
+
+
+async def test_unknown_command_from_a_stranger_gets_nothing(svc):
+    message = Replies()
+    await svc.bot._unknown_command(command_update(999, message), None)
+    assert message.texts == []

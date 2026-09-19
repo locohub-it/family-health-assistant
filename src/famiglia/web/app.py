@@ -170,6 +170,14 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         values: dict[str, str] = {}
         for key in ("bot_token", "gemini_api_key", "composio_api_key"):
             secret_field(form, key, values)
+        if values.get("composio_api_key", "").startswith("ck_"):
+            flash(
+                request,
+                "error",
+                "Quella è una chiave «consumer» (ck_…), che serve per MCP. Per il calendario serve la "
+                "Project API key: su platform.composio.dev, nelle impostazioni del progetto, chiave che inizia con ak_.",
+            )
+            return back("/api")
         model = form.get("gemini_model", "").strip()
         if not model or len(model) > 80 or " " in model:
             flash(request, "error", "Modello Gemini: inserisci un nome valido, ad esempio gemini-3.8-flash")

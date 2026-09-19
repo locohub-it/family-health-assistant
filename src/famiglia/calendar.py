@@ -26,6 +26,12 @@ DEFAULT_MINUTES = 60
 UNKNOWN_TIME = "09:00"  # se sul documento manca l'ora: l'evento è segnato «orario da confermare»
 
 
+BAD_KEY_MESSAGE = (
+    "La chiave Composio non è valida o non ha i permessi: chi gestisce il bot deve controllarla in "
+    "«Chiavi API» (serve la Project API key, quella che inizia con ak_)."
+)
+
+
 class CalendarError(Exception):
     """Errore con un messaggio già pronto da mostrare all'utente."""
 
@@ -78,6 +84,8 @@ class Calendar:
         except CalendarError:
             raise
         except Exception as exc:  # noqa: BLE001 - qualunque errore dell'SDK diventa un messaggio gentile
+            if getattr(exc, "status_code", None) in (401, 403) or "invalid api key" in str(exc).lower():
+                raise CalendarError(BAD_KEY_MESSAGE, f"{type(exc).__name__}: {exc}") from exc
             raise CalendarError(
                 "Non riesco a usare Google Calendar in questo momento.", f"{type(exc).__name__}: {exc}"
             ) from exc

@@ -252,3 +252,16 @@ def test_cannot_choose_a_calendar_that_is_not_in_the_list(cal_client):
     response = client.post(f"/utenti/{service.mario.id}/calendario", data={"csrf": token, "calendar_id": "altrui@example.com"})
     assert "Calendario non valido" in response.text
     assert service.users.get(service.mario.id).calendar_id == "primary"
+
+
+def test_consumer_key_ck_is_refused_with_an_explanation(client, service):
+    token = login(client)
+    response = client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "composio_api_key": "ck_abcdef123456"})
+    assert "Project API key" in response.text and "ak_" in response.text
+    assert service.settings.get("composio_api_key") == ""
+
+
+def test_project_key_ak_is_accepted(client, service):
+    token = login(client)
+    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "composio_api_key": "ak_abcdef123456"})
+    assert service.settings.get("composio_api_key") == "ak_abcdef123456"
