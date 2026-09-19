@@ -92,7 +92,9 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
    scrivere). Se la cartella scelta smette di funzionare, i documenti vanno comunque in
    `Documenti` (e, in ultima istanza, nel volume dei dati) e l'errore compare solo nel pannello,
    mai in chat.
-3. **Utenti**: aggiungi nome e ID Telegram di ogni familiare. Poi, per ognuno, **Collega**: si apre
+3. **Utenti**: aggiungi di ogni familiare **nome e cognome come sono scritti su ricette e referti** e l'ID
+   Telegram: servono ad abbinare ogni documento alla persona giusta, anche quando lo invia un altro
+   familiare. Con «Modifica» si correggono i dati (il database esistente si aggiorna da solo). Poi, per ognuno, **Collega**: si apre
    una pagina con il link (e il QR) su cui la persona accede al proprio Google. Lo stesso link lo
    riceve scrivendo `/calendario` al bot. Se ha più calendari, si sceglie quello delle visite.
    Il pulsante **↻ Aggiorna** ricontrolla subito il collegamento di quella persona; se non si

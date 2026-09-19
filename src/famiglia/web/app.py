@@ -264,10 +264,31 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             flash(request, "error", "L'ID Telegram deve essere un numero")
             return back("/utenti")
         try:
-            user = service.users.add(telegram_id, form.get("name", ""), form.get("role", ""))
+            user = service.users.add(
+                telegram_id, form.get("name", ""), form.get("role", ""), form.get("first_name", ""), form.get("last_name", "")
+            )
             flash(request, "ok", f"{user.name} aggiunto")
         except ValueError as exc:
             flash(request, "error", str(exc))
+        return back("/utenti")
+
+    @app.get("/utenti/{user_id}/modifica")
+    async def users_edit_page(request: Request, user_id: int) -> Response:
+        require_login(request)
+        return page(request, "modifica.html", active="utenti", target=find_user(user_id))
+
+    @app.post("/utenti/{user_id}/modifica")
+    async def users_edit_save(request: Request, user_id: int) -> Response:
+        form = await checked_form(request)
+        find_user(user_id)
+        try:
+            user = service.users.update(
+                user_id, form.get("name", ""), form.get("role", ""), form.get("first_name", ""), form.get("last_name", "")
+            )
+        except ValueError as exc:
+            flash(request, "error", str(exc))
+            return back(f"/utenti/{user_id}/modifica")
+        flash(request, "ok", f"{user.name}: dati aggiornati")
         return back("/utenti")
 
     @app.post("/utenti/{user_id}/elimina")

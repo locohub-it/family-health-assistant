@@ -265,3 +265,47 @@ def test_project_key_ak_is_accepted(client, service):
     token = login(client)
     client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "composio_api_key": "ak_abcdef123456"})
     assert service.settings.get("composio_api_key") == "ak_abcdef123456"
+
+
+# --- Nome e cognome reali ------------------------------------------------------
+
+
+def test_add_user_with_real_name_shows_it_in_the_list(client, service):
+    token = login(client)
+    client.post("/utenti", data={"csrf": token, "first_name": "Mario", "last_name": "Rossi", "telegram_id": "111", "name": "Papà", "role": "papà"})
+    user = service.users.by_telegram_id(111)
+    assert (user.first_name, user.last_name, user.name) == ("Mario", "Rossi", "Papà")
+    html = client.get("/utenti").text
+    assert "Mario Rossi" in html and "il bot lo chiama «Papà»" in html
+
+
+def test_user_without_real_name_is_flagged_with_a_link_to_add_it(client, service):
+    login(client)
+    user = service.users.add(111, "Mario")
+    html = client.get("/utenti").text
+    assert "manca il nome reale" in html and f"/utenti/{user.id}/modifica" in html
+
+
+def test_edit_user_page_and_save(client, service):
+    token = login(client)
+    user = service.users.add(111, "Mario")
+    page = client.get(f"/utenti/{user.id}/modifica").text
+    assert 'value="Mario"' in page and "111" in page
+    client.post(f"/utenti/{user.id}/modifica", data={"csrf": token, "first_name": "Mario", "last_name": "Rossi", "name": "Papà", "role": "papà"})
+    updated = service.users.get(user.id)
+    assert (updated.full_name, updated.name, updated.role, updated.telegram_id) == ("Mario Rossi", "Papà", "papà", 111)
+
+
+def test_edit_with_invalid_data_shows_the_error_and_changes_nothing(client, service):
+    token = login(client)
+    user = service.users.add(111, "Mario")
+    response = client.post(f"/utenti/{user.id}/modifica", data={"csrf": token, "name": "", "first_name": "", "last_name": ""})
+    assert "almeno il nome" in response.text and service.users.get(user.id).name == "Mario"
+
+
+def test_edit_requires_login_and_csrf_and_a_real_user(client, service):
+    user = service.users.add(111, "Mario")
+    assert client.get(f"/utenti/{user.id}/modifica", follow_redirects=False).status_code == 303
+    login(client)
+    assert client.post(f"/utenti/{user.id}/modifica", data={"name": "X"}).status_code == 403
+    assert client.get("/utenti/999/modifica").status_code == 404

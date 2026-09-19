@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Modifica utente{% endblock %}
+{% block content %}
+<h1>Modifica {{ target.name }}</h1>
+<form method="post" action="/utenti/{{ target.id }}/modifica" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="first_name">Nome</label>
+  <input id="first_name" name="first_name" type="text" maxlength="60" value="{{ target.first_name }}" autocomplete="off">
+  <label for="last_name">Cognome</label>
+  <input id="last_name" name="last_name" type="text" maxlength="60" value="{{ target.last_name }}" autocomplete="off">
+  <div class="hint">Come sono scritti sulle ricette e sui referti: servono ad abbinare i documenti alla persona giusta,
+    anche quando li invia un altro familiare.</div>
+  <label for="role">Ruolo <span class="hint">(facoltativo)</span></label>
+  <input id="role" name="role" type="text" maxlength="40" value="{{ target.role }}">
+  <label for="name">Come lo chiama il bot</label>
+  <input id="name" name="name" type="text" maxlength="60" value="{{ target.name }}" required>
+  <div class="hint">È anche il nome della sua cartella: se lo cambi, i nuovi documenti vanno in una cartella nuova;
+    quelli già salvati restano dove sono.</div>
+  <p class="hint">ID Telegram: <code>{{ target.telegram_id }}</code> (non si cambia; per un ID diverso rimuovi e riaggiungi la persona).</p>
+  <div class="actions"><button class="primary">Salva</button> <a href="/utenti"><button type="button">Annulla</button></a></div>
+</form>
+{% endblock %}

@@ -52,8 +52,9 @@ def match_patient(patient_name: str, users: list[User]) -> list[User]:
     wanted = _tokens(patient_name)
     if not wanted:
         return []
-    scored = [(len(wanted & _tokens(u.name)), u) for u in users]
-    scored = [(s, u) for s, u in scored if s and (_tokens(u.name) <= wanted or wanted <= _tokens(u.name))]
+    # Si confronta con il nome reale (nome + cognome) se c'è, altrimenti con quello breve.
+    scored = [(len(wanted & _tokens(u.full_name)), u) for u in users]
+    scored = [(s, u) for s, u in scored if s and (_tokens(u.full_name) <= wanted or wanted <= _tokens(u.full_name))]
     if not scored:
         return []
     best = max(s for s, _ in scored)

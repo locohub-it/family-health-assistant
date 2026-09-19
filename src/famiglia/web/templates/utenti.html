@@ -12,7 +12,8 @@
     <tr><th>Nome</th><th>Ruolo</th><th>ID Telegram</th><th>Google Calendar</th><th></th></tr>
     {% for u in users %}
     <tr>
-      <td>{{ u.name }}</td>
+      <td>{{ u.full_name }}{% if u.full_name != u.name %}<div class="hint">il bot lo chiama «{{ u.name }}»</div>{% endif %}
+        {% if not u.first_name and not u.last_name %}<div class="hint">manca il nome reale: <a href="/utenti/{{ u.id }}/modifica">aggiungilo</a></div>{% endif %}</td>
       <td>{{ u.role }}</td>
       <td><code>{{ u.telegram_id }}</code></td>
       <td>
@@ -34,7 +35,8 @@
             <input type="hidden" name="csrf" value="{{ csrf }}"><button title="Ricontrolla ora il collegamento">↻ Aggiorna</button></form>
         {% endif %}
       </td>
-      <td><form method="post" action="/utenti/{{ u.id }}/elimina" class="inline">
+      <td><a href="/utenti/{{ u.id }}/modifica"><button type="button">Modifica</button></a>
+        <form method="post" action="/utenti/{{ u.id }}/elimina" class="inline">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button class="danger" onclick="return confirm('Rimuovere {{ u.name }}? Verranno cancellati anche i suoi referti e appuntamenti salvati.')">Rimuovi</button></form></td>
     </tr>
@@ -46,12 +48,19 @@
 <form method="post" action="/utenti" class="card">
   <h2>Aggiungi utente</h2>
   <input type="hidden" name="csrf" value="{{ csrf }}">
-  <label for="name">Nome</label>
-  <input id="name" name="name" type="text" maxlength="60" required>
+  <label for="first_name">Nome</label>
+  <input id="first_name" name="first_name" type="text" maxlength="60" autocomplete="off" required>
+  <label for="last_name">Cognome</label>
+  <input id="last_name" name="last_name" type="text" maxlength="60" autocomplete="off" required>
+  <div class="hint">Come sono scritti sulle ricette e sui referti: servono ad abbinare i documenti alla persona giusta,
+    anche quando li invia un altro familiare. Con più nomi (Maria Grazia) scrivili tutti nel campo Nome.</div>
   <label for="telegram_id">ID Telegram</label>
   <input id="telegram_id" name="telegram_id" type="number" min="1" required>
   <label for="role">Ruolo <span class="hint">(facoltativo, es. mamma, papà, figlio)</span></label>
   <input id="role" name="role" type="text" maxlength="40">
+  <label for="name">Come lo chiama il bot <span class="hint">(facoltativo: se vuoto usa il nome)</span></label>
+  <input id="name" name="name" type="text" maxlength="60" autocomplete="off">
+  <div class="hint">È anche il nome della sua cartella dei documenti.</div>
   <div class="actions"><button class="primary">Aggiungi</button></div>
 </form>
 {% endblock %}

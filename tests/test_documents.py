@@ -209,6 +209,35 @@ def test_match_patient(written, expected):
     assert [u.name for u in match_patient(written, users)] == expected
 
 
+def _named(uid, name, first, last):
+    return User(uid, uid, name, "", "primary", first, last)
+
+
+@pytest.mark.parametrize("written", ["ROSSI MARIO", "Sig. Mario Rossi", "Rossi Mario Giuseppe", "MARIO ROSSI"])
+def test_documents_match_the_real_name_even_when_the_bot_calls_the_person_something_else(written):
+    users = [_named(1, "Papà", "Mario", "Rossi"), _named(2, "Mamma", "Anna", "Bianchi")]
+    assert [u.name for u in match_patient(written, users)] == ["Papà"]
+
+
+def test_real_surname_tells_apart_two_people_with_the_same_first_name():
+    users = [_named(1, "Papà", "Mario", "Rossi"), _named(2, "Zio", "Mario", "Verdi")]
+    assert [u.name for u in match_patient("VERDI MARIO", users)] == ["Zio"]
+    assert [u.name for u in match_patient("Mario Bianchi", users)] == []  # cognome che non c'è: nessun abbinamento
+
+
+def test_without_real_names_the_short_name_is_still_used():
+    assert [u.name for u in match_patient("Rossi Mario", [_user(1, "Mario Rossi")])] == ["Mario Rossi"]
+
+
+async def test_a_prescription_addressed_to_the_real_name_goes_to_that_person(make):
+    svc = make(referto(patient="BIANCHI ANNA MARIA"))
+    svc.users.update(svc.anna.id, "Mamma", "mamma", "Anna Maria", "Bianchi")
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    doc = svc.records.get_document(outcome.document_id)
+    assert doc["user_id"] == svc.anna.id and "Mamma/Referti" in doc["file_path"]
+    assert "referto di Mamma" in outcome.text
+
+
 def test_match_patient_reports_ambiguity():
     users = [_user(1, "Mario"), _user(2, "Mario Rossi")]
     assert sorted(u.name for u in match_patient("Mario", users)) == ["Mario", "Mario Rossi"]

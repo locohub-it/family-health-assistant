@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS users (
     telegram_id INTEGER NOT NULL UNIQUE,
     name TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT '',
-    calendar_id TEXT NOT NULL DEFAULT 'primary'
+    calendar_id TEXT NOT NULL DEFAULT 'primary',
+    first_name TEXT NOT NULL DEFAULT '',
+    last_name TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +62,12 @@ CREATE TABLE IF NOT EXISTS activity (
 """
 
 
+# Colonne aggiunte dopo la prima versione: si aggiungono ai database già esistenti senza perdere i dati.
+ADDED_COLUMNS = {
+    "users": {"first_name": "TEXT NOT NULL DEFAULT ''", "last_name": "TEXT NOT NULL DEFAULT ''"},
+}
+
+
 class Database:
     def __init__(self, path: str | Path) -> None:
         path = Path(path)
@@ -72,6 +80,14 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(SCHEMA)
+            self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        for table, columns in ADDED_COLUMNS.items():
+            existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            for column, definition in columns.items():
+                if column not in existing:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def execute(self, sql: str, params: tuple | list = ()) -> list[sqlite3.Row]:
         with self._lock:
