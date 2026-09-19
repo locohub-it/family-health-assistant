@@ -82,12 +82,20 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
 
 ## Primo avvio dal pannello
 
-1. **Chiavi API**: token del bot, chiave Gemini, chiave Composio.
-2. **Cartella**: sfoglia dentro `STORAGE_ROOT`, crea una cartella se serve e scegli
-   «Usa questa cartella». Il pannello controlla che si possa scrivere davvero.
+1. **Chiavi API**: token del bot, chiave Gemini, chiave Composio. Sul piano gratuito Gemini ha
+   limiti di richieste per modello: il **modello di riserva** entra in azione da solo quando quello
+   principale ha finito le richieste o non risponde, e il bot aspetta e riprova se il limite è al minuto.
+2. **Cartella** (facoltativo): senza scegliere niente il bot salva in `Documenti`, dentro
+   `STORAGE_ROOT`, e la crea da solo. Per cambiarla, sfoglia dentro `STORAGE_ROOT`, crea una
+   cartella se serve e scegli «Usa questa cartella» (il pannello controlla che si possa
+   scrivere). Se la cartella scelta smette di funzionare, i documenti vanno comunque in
+   `Documenti` (e, in ultima istanza, nel volume dei dati) e l'errore compare solo nel pannello,
+   mai in chat.
 3. **Utenti**: aggiungi nome e ID Telegram di ogni familiare. Poi, per ognuno, **Collega**: si apre
    una pagina con il link (e il QR) su cui la persona accede al proprio Google. Lo stesso link lo
    riceve scrivendo `/calendario` al bot. Se ha più calendari, si sceglie quello delle visite.
+   Il pulsante **↻ Aggiorna** ricontrolla subito il collegamento di quella persona; se non si
+   riesce a verificare, la causa vera compare sotto lo stato.
 
 Password del pannello dimenticata:
 `docker compose run --rm famiglia python -m famiglia.set_password`

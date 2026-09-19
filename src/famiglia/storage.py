@@ -66,6 +66,15 @@ class Storage:
             raise StorageError(f"Impossibile creare la cartella: {exc.strerror or exc}") from exc
         return self.relative(new)
 
+    def ensure_folder(self, relative: str) -> Path:
+        """La cartella (e quelle sopra) viene creata se non c'è: un percorso mancante non deve fermare il bot."""
+        folder = self.resolve(relative)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise StorageError(f"Impossibile creare la cartella: {exc.strerror or exc}") from exc
+        return folder
+
     def check_writable(self, relative: str) -> Path:
         """Verifica che si possa scrivere davvero (permessi NAS, volume in sola lettura)."""
         folder = self.resolve(relative)
@@ -82,10 +91,14 @@ class Storage:
     def save(self, base: str, parts: list[str], filename: str, data: bytes) -> str:
         """Scrive un file in base/parts/filename e restituisce il percorso relativo alla radice."""
         clean = [_safe_part(p) for p in parts]
+        self.ensure_folder(base)
         folder = self.check_writable(base)
         for part in clean:
             folder = folder / part
-            folder.mkdir(exist_ok=True)
+            try:
+                folder.mkdir(exist_ok=True)
+            except OSError as exc:
+                raise StorageError(f"Impossibile creare la cartella: {exc.strerror or exc}") from exc
         target = self.resolve(self.relative(folder / _safe_part(filename)))
         counter = 1
         stem, suffix = target.stem, target.suffix
@@ -97,7 +110,6 @@ class Storage:
         except OSError as exc:
             raise StorageError(f"Non riesco a salvare il file: {exc.strerror or exc}") from exc
         return self.relative(target)
-
 
     def delete(self, relative: str) -> None:
         """Toglie un file salvato in precedenza; se non c'è più non è un errore."""

@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 from famiglia.documents import MAX_BYTES, match_patient
@@ -95,13 +97,68 @@ async def test_unknown_patient_falls_back_to_sender_and_says_so(make):
     assert "Giuseppe Verdi" in outcome.text and "non è tra i familiari" in outcome.text
 
 
-async def test_gemini_is_not_called_for_unsupported_or_huge_files_or_without_folder(make):
+async def test_gemini_is_not_called_for_unsupported_or_huge_files(make):
     svc = make(referto())
     assert "non lo so leggere" in (await svc.documents.process(svc.mario, b"x", "video/mp4")).text
     assert "troppo grande" in (await svc.documents.process(svc.mario, b"x" * (MAX_BYTES + 1), "image/jpeg")).text
-    svc.settings.update({"documents_dir": ""})
-    assert "scegliere la cartella" in (await svc.documents.process(svc.mario, JPEG, "image/jpeg")).text
     assert svc.reader.calls == []
+
+
+# --- Cartella predefinita e riserva --------------------------------------------
+
+
+async def test_without_a_chosen_folder_documents_go_to_the_default_one(make, root):
+    svc = make(referto())
+    svc.settings.update({"documents_dir": ""})
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    path = svc.records.get_document(outcome.document_id)["file_path"]
+    assert path == "Documenti/Mario Rossi/Referti/2025-10-25_referto.jpg" and (root / path).exists()
+    assert "cartella" not in outcome.text.lower()
+
+
+async def test_a_wrong_path_never_reaches_the_chat_and_uses_the_default_folder(make, root):
+    svc = make(referto())
+    (root / "bloccata").write_text("sono un file, non una cartella")  # il percorso scelto non è una cartella
+    svc.settings.update({"documents_dir": "bloccata"})
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert outcome.document_id and outcome.text.startswith("Ho salvato il referto")
+    assert svc.records.get_document(outcome.document_id)["file_path"].startswith("Documenti/Mario Rossi/Referti/")
+    errors = [r for r in svc.recent_activity(5) if r["kind"] == "errore"]
+    assert len(errors) == 1 and "«bloccata»" in errors[0]["detail"] and "Salvato in Documenti/" in errors[0]["detail"]
+
+
+async def test_a_deleted_chosen_folder_is_simply_recreated(make, root):
+    svc = make(referto())
+    svc.settings.update({"documents_dir": "Vecchia/Cartella"})
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert svc.records.get_document(outcome.document_id)["file_path"].startswith("Vecchia/Cartella/Mario Rossi/")
+    assert svc.recent_activity(5) == [] or all(r["kind"] != "errore" for r in svc.recent_activity(5))
+
+
+async def test_when_the_whole_root_is_unusable_the_data_volume_is_the_last_resort(make, root, tmp_path):
+    svc = make(referto())
+    shutil.rmtree(root / "Documenti")
+    (root / "Documenti").write_text("un file al posto della cartella predefinita")
+    (root / "Altra").write_text("e anche la scelta è un file")
+    svc.settings.update({"documents_dir": "Altra"})
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    path = svc.records.get_document(outcome.document_id)["file_path"]
+    assert path.startswith("@volume/Mario Rossi/Referti/") and outcome.text.startswith("Ho salvato il referto")
+    assert (tmp_path / "data" / "documenti" / path.removeprefix("@volume/")).read_bytes() == JPEG
+    # e «Annulla» toglie il file dal posto giusto
+    assert "Annullato" in await svc.documents.undo(svc.mario, outcome.document_id)
+    assert not (tmp_path / "data" / "documenti" / path.removeprefix("@volume/")).exists()
+
+
+async def test_the_error_reaches_the_chat_only_if_nothing_at_all_can_be_written(make, root):
+    from famiglia.storage import StorageError
+
+    svc = make(referto())
+    shutil.rmtree(root / "Documenti")
+    (root / "Documenti").write_text("x")
+    svc.documents._fallback = None  # nessuna riserva
+    with pytest.raises(StorageError):
+        await svc.documents.process(svc.mario, JPEG, "image/jpeg")
 
 
 async def test_gemini_error_is_propagated_and_nothing_is_saved(make):

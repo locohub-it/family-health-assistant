@@ -66,3 +66,20 @@ def test_save_cannot_escape_the_folder(storage, root, parts, filename):
     except StorageError:
         return
     assert (root / saved).resolve().is_relative_to(root.resolve() / "Documenti")
+
+
+def test_default_folder_is_created_at_startup_in_an_empty_root(tmp_path):
+    from famiglia.service import Service
+
+    empty = tmp_path / "vuota"
+    empty.mkdir()
+    Service(tmp_path / "data", "chiave-di-test", empty).ensure_default_folder()
+    assert (empty / "Documenti").is_dir()
+
+
+def test_startup_with_an_unmounted_root_does_not_fail_or_create_anything(tmp_path):
+    from famiglia.service import Service
+
+    missing = tmp_path / "non-montata"
+    Service(tmp_path / "data", "chiave-di-test", missing).ensure_default_folder()
+    assert not missing.exists()

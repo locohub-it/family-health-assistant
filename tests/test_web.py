@@ -140,6 +140,7 @@ def test_users_page_shows_who_is_connected(cal_client):
     assert html.count("collegato</span>") == 2  # «collegato» e «non collegato»
     assert f"/utenti/{service.mario.id}/calendario" in html and f"/utenti/{service.anna.id}/collega" in html
     assert f"/utenti/{service.mario.id}/collega" not in html
+    assert html.count("↻ Aggiorna") == 2  # un pulsante per ogni utente
 
 
 def test_users_page_without_composio_key_explains_it(client, service):
@@ -148,12 +149,75 @@ def test_users_page_without_composio_key_explains_it(client, service):
     assert "serve la chiave Composio" in client.get("/utenti").text
 
 
-def test_users_page_survives_composio_being_down(cal_client):
+def test_users_page_survives_composio_being_down_and_shows_the_real_reason(cal_client):
     client, service, composio = cal_client
-    composio.connected_accounts.list = lambda **kw: (_ for _ in ()).throw(ConnectionError("giù"))
+    composio.connected_accounts.list = lambda **kw: (_ for _ in ()).throw(ConnectionError("Composio giù"))
     login(client)
     response = client.get("/utenti")
-    assert response.status_code == 200 and "Non riesco a usare Google Calendar" in response.text and "Anna" in response.text
+    assert response.status_code == 200 and "Anna" in response.text and "Mario" in response.text
+    assert response.text.count("non verificabile") == 2
+    assert "ConnectionError: Composio giù" in response.text  # la causa vera, non un messaggio generico
+
+
+def test_refresh_button_rechecks_and_picks_up_a_connection_made_in_the_meantime(cal_client):
+    client, service, composio = cal_client
+    token = login(client)
+    assert "non ancora collegato" in client.post(f"/utenti/{service.anna.id}/aggiorna", data={"csrf": token}).text
+    composio.connected.add("famiglia-222")  # Anna collega il suo Google
+    response = client.post(f"/utenti/{service.anna.id}/aggiorna", data={"csrf": token})
+    assert "Anna: Google Calendar collegato" in response.text
+    assert client.get("/utenti").text.count("non collegato") == 0
+
+
+def test_refresh_reports_the_reason_when_the_check_fails(cal_client):
+    client, service, composio = cal_client
+    token = login(client)
+    composio.connected_accounts.list = lambda **kw: (_ for _ in ()).throw(ConnectionError("Composio giù"))
+    response = client.post(f"/utenti/{service.mario.id}/aggiorna", data={"csrf": token})
+    assert "Mario: non riesco a verificare" in response.text and "Composio giù" in response.text
+
+
+def test_refresh_requires_login_and_csrf(cal_client):
+    client, service, _ = cal_client
+    assert client.post(f"/utenti/{service.anna.id}/aggiorna", follow_redirects=False).status_code == 303
+    login(client)
+    assert client.post(f"/utenti/{service.anna.id}/aggiorna").status_code == 403
+
+
+# --- Cartella predefinita ------------------------------------------------------
+
+
+def test_default_folder_is_shown_when_none_is_chosen(client, service):
+    login(client)
+    assert "predefinita" in client.get("/cartella").text and "Documenti" in client.get("/cartella").text
+    assert "Cartella dei documenti" not in client.get("/").text  # non è più un requisito per partire
+
+
+def test_back_to_the_default_folder(client, service):
+    token = login(client)
+    service.settings.update({"documents_dir": "Foto"})
+    assert "Torna alla predefinita" in client.get("/cartella").text
+    client.post("/cartella/predefinita", data={"csrf": token})
+    assert service.settings.get("documents_dir") == ""
+
+
+def test_an_unusable_chosen_folder_is_flagged_in_the_panel(client, service, root):
+    login(client)
+    (root / "rotta").write_text("file, non cartella")
+    service.settings.update({"documents_dir": "rotta"})
+    for page in ("/cartella", "/"):
+        html = client.get(page).text
+        assert "utilizzabile" in html and "Documenti" in html
+
+
+def test_fallback_model_can_be_saved_and_emptied(client, service):
+    token = login(client)
+    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "gemini_fallback_model": "gemini-3.5-flash-lite"})
+    assert service.settings.get("gemini_fallback_model") == "gemini-3.5-flash-lite"
+    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "gemini_fallback_model": ""})
+    assert service.settings.get("gemini_fallback_model") == ""
+    response = client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "gemini_fallback_model": "nome con spazi"})
+    assert "Modello di riserva" in response.text
 
 
 def test_connect_page_shows_link_and_qr(cal_client):

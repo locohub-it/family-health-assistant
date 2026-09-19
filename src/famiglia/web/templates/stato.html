@@ -23,7 +23,9 @@
   </div>
   <div class="card">
     <h2>Documenti</h2>
-    <p>Cartella: <b>{{ 'Radice' if s.get('documents_dir') == '.' else (s.get('documents_dir') or 'non scelta') }}</b></p>
+    <p>Cartella: <b>{{ 'Radice' if s.get('documents_dir') == '.' else (s.get('documents_dir') or default_dir + ' (predefinita)') }}</b></p>
+    {% if folder_problem %}<p><span class="badge error">cartella scelta non utilizzabile</span></p>
+    <p class="hint">{{ folder_problem }}. Si usa «{{ default_dir }}».</p>{% endif %}
   </div>
 </div>
 

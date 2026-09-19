@@ -12,11 +12,11 @@ from .bot import BotRunner
 from .calendar import Calendar
 from .consult import Answerer, Consultant
 from .db import Database
-from .documents import DocumentService
+from .documents import DEFAULT_DOCUMENTS_DIR, DocumentService
 from .gemini import DocumentReader, Gemini
 from .records import Records
 from .settings import BOT_KEYS, Settings
-from .storage import Storage
+from .storage import Storage, StorageError
 from .users import UserStore
 
 
@@ -35,11 +35,12 @@ class Service:
         self.settings = Settings(self.db, secret_key)
         self.users = UserStore(self.db)
         self.storage = Storage(storage_root)
+        self.fallback_storage = Storage(Path(data_dir) / "documenti")  # nel volume dei dati: sempre disponibile
         self.records = Records(self.db)
-        self.gemini = Gemini(self.settings, gemini_http)
+        self.gemini = Gemini(self.settings, gemini_http, self.log)
         self.calendar = Calendar(self.settings, composio_factory)
         self.documents = DocumentService(
-            self.settings, self.users, self.storage, self.records, reader or self.gemini, self.log, self.calendar
+            self.settings, self.users, self.storage, self.records, reader or self.gemini, self.log, self.calendar, self.fallback_storage
         )
         self.consultant = Consultant(self.users, self.records, answerer or self.gemini, self.log)
         self.bot = BotRunner(self.settings, self.users, self.documents, self.consultant, self.log, self.calendar)
@@ -48,6 +49,15 @@ class Service:
     def _settings_changed(self, keys: set[str]) -> None:
         if keys & BOT_KEYS:
             self.bot.restart()
+
+    def ensure_default_folder(self) -> None:
+        """Crea «Documenti» nella radice, così esiste e si vede già nel selettore."""
+        if not self.storage.available:
+            return
+        try:
+            self.storage.ensure_folder(DEFAULT_DOCUMENTS_DIR)
+        except StorageError as exc:
+            self.log("errore", f"Cartella predefinita non creabile: {exc}")
 
     def log(self, kind: str, detail: str = "") -> None:
         """Registro delle attività, mostrato nella pagina Stato."""

@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Literal, Protocol
+import re
+from dataclasses import dataclass
+from typing import Callable, Literal, Protocol
 
 import httpx
 from google import genai
@@ -21,12 +24,74 @@ log = logging.getLogger(__name__)
 DocumentKind = Literal["appuntamento", "referto", "ricetta", "altro", "illeggibile"]
 
 
+MAX_PARALLEL_CALLS = 2  # più foto insieme non devono superare il limite di richieste al minuto
+MAX_RETRIES = 2
+MAX_WAIT_SECONDS = 45  # oltre questo tempo non si resta ad aspettare: si cambia modello o si avvisa
+DEFAULT_WAIT_SECONDS = 8
+
+
 class GeminiError(Exception):
     """Errore di Gemini con un messaggio già pronto da mostrare all'utente."""
 
     def __init__(self, user_message: str, detail: str = "") -> None:
         super().__init__(detail or user_message)
         self.user_message = user_message
+
+
+@dataclass(frozen=True)
+class Quota:
+    """Perché Google ha risposto 429: da questo dipende se ha senso aspettare."""
+
+    kind: str  # "minuto" | "giorno" | "zero" | "altro"
+    retry_after: float | None = None
+
+
+def _seconds(value: object) -> float | None:
+    match = re.fullmatch(r"\s*([\d.]+)s\s*", str(value or ""))
+    return float(match.group(1)) if match else None
+
+
+def classify_quota(exc: errors.APIError) -> Quota:
+    body = exc.details if isinstance(exc.details, dict) else {}
+    error = body.get("error") if isinstance(body.get("error"), dict) else {}
+    kind, retry_after = "altro", None
+    for item in error.get("details") or []:
+        item_type = str(item.get("@type", ""))
+        if item_type.endswith("RetryInfo"):
+            retry_after = _seconds(item.get("retryDelay"))
+        elif item_type.endswith("QuotaFailure"):
+            for violation in item.get("violations") or []:
+                quota_id = f"{violation.get('quotaId', '')} {violation.get('quotaMetric', '')}".lower()
+                if str(violation.get("quotaValue", "")) == "0":
+                    kind = "zero"
+                elif kind != "zero" and ("perday" in quota_id or "per_day" in quota_id):
+                    kind = "giorno"
+                elif kind == "altro" and "perminute" in quota_id:
+                    kind = "minuto"
+    message = (exc.message or "").lower()
+    if kind == "altro" and "limit: 0" in message:
+        kind = "zero"
+    if retry_after is None:  # a volte il tempo è solo nel testo: «Please retry in 33.6s»
+        found = re.search(r"retry in ([\d.]+)s", message)
+        retry_after = float(found.group(1)) if found else None
+    return Quota(kind, retry_after)
+
+
+QUOTA_MESSAGES = {
+    "giorno": "Ho finito le richieste giornaliere che Google concede a questa chiave. Riprova domani, oppure "
+    "chi gestisce il bot può attivare la fatturazione su Google.",
+    "zero": "Il modello Gemini scelto non è disponibile con il piano di questa chiave. Chi gestisce il bot "
+    "può cambiare modello dal pannello.",
+}
+BUSY_MESSAGE = "Gemini è molto occupato in questo momento. Riprova tra un minuto."
+
+
+class _TryNextModel(Exception):
+    """Questo modello non può rispondere ora (quota, non esiste, non risponde): si prova quello di riserva."""
+
+    def __init__(self, error: "GeminiError") -> None:
+        super().__init__(str(error))
+        self.error = error
 
 
 class LabResult(BaseModel):
@@ -98,11 +163,19 @@ class DocumentReader(Protocol):
 
 
 class Gemini:
-    def __init__(self, settings: Settings, http_client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        http_client: httpx.AsyncClient | None = None,
+        log: Callable[[str, str], None] | None = None,
+    ) -> None:
         self._settings = settings
         self._http_client = http_client
+        self._log = log or (lambda kind, detail: None)
         self._client: genai.Client | None = None
         self._client_key = ""
+        self._slots = asyncio.Semaphore(MAX_PARALLEL_CALLS)
+        self._sleep = asyncio.sleep  # sostituibile nei test
 
     def _client_for_current_key(self) -> genai.Client:
         key = self._settings.get("gemini_api_key")
@@ -116,18 +189,46 @@ class Gemini:
 
     async def _generate(self, contents: list, config: types.GenerateContentConfig) -> str:
         client = self._client_for_current_key()
-        try:
-            response = await client.aio.models.generate_content(
-                model=self._settings.get("gemini_model"), contents=contents, config=config
-            )
-        except errors.APIError as exc:
-            raise GeminiError(_friendly(exc), f"{exc.code}: {exc.message}") from exc
-        except (httpx.HTTPError, OSError) as exc:
-            raise GeminiError("Non riesco a collegarmi a Gemini: controlla la connessione e riprova.", repr(exc)) from exc
-        text = response.text
-        if not text:
-            raise GeminiError("Gemini non ha dato nessuna risposta per questo documento. Riprova con un'altra foto.")
-        return text
+        primary = self._settings.get("gemini_model")
+        fallback = self._settings.get("gemini_fallback_model")
+        models = [primary] + ([fallback] if fallback and fallback != primary else [])
+        failures: list[GeminiError] = []
+        for model in models:
+            try:
+                text = await self._call_model(client, model, contents, config)
+            except _TryNextModel as skip:
+                failures.append(skip.error)
+                self._log("errore", f"Gemini, modello {model}: {skip.error}")
+                continue
+            if failures:
+                self._log("errore", f"Modello {primary} non disponibile, ho risposto con {model}")
+            return text
+        raise failures[0]  # il messaggio più utile è quello del modello scelto dall'utente
+
+    async def _call_model(self, client: genai.Client, model: str, contents: list, config) -> str:
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                async with self._slots:
+                    response = await client.aio.models.generate_content(model=model, contents=contents, config=config)
+            except errors.APIError as exc:
+                detail = f"{exc.code} {exc.status}: {exc.message}"
+                if exc.code == 429:
+                    quota = classify_quota(exc)
+                    wait = quota.retry_after if quota.retry_after is not None else DEFAULT_WAIT_SECONDS * (attempt + 1)
+                    if quota.kind in ("giorno", "zero") or attempt == MAX_RETRIES or wait > MAX_WAIT_SECONDS:
+                        raise _TryNextModel(GeminiError(QUOTA_MESSAGES.get(quota.kind, BUSY_MESSAGE), detail)) from exc
+                    await self._sleep(wait + 1)  # limite al minuto: basta aspettare
+                    continue
+                if exc.code == 404 or (exc.code or 0) >= 500:
+                    raise _TryNextModel(GeminiError(_friendly(exc), detail)) from exc
+                raise GeminiError(_friendly(exc), detail) from exc
+            except (httpx.HTTPError, OSError) as exc:
+                raise GeminiError("Non riesco a collegarmi a Gemini: controlla la connessione e riprova.", repr(exc)) from exc
+            text = response.text
+            if not text:
+                raise GeminiError("Gemini non ha dato nessuna risposta per questo documento. Riprova con un'altra foto.")
+            return text
+        raise AssertionError("il ciclo termina sempre con un ritorno o un errore")  # pragma: no cover
 
     async def analyze_document(self, data: bytes, mime: str) -> Extraction:
         config = types.GenerateContentConfig(
@@ -169,7 +270,7 @@ class Gemini:
 def _friendly(exc: errors.APIError) -> str:
     code = exc.code or 0
     if code == 429:
-        return "Gemini ha ricevuto troppe richieste. Riprova tra un minuto."
+        return BUSY_MESSAGE
     if code in (401, 403) or (code == 400 and "api key" in (exc.message or "").lower()):
         return "La chiave Gemini non è valida o non ha i permessi. Avvisa chi gestisce il bot."
     if code == 404:

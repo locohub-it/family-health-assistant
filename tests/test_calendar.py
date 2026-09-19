@@ -112,7 +112,14 @@ async def test_connect_link_and_connected_users(make):
     assert await svc.calendar.connect_link(anna) == "https://connect.composio.dev/link/ln_abc"
     assert svc.composio.authorized == ["famiglia-222:googlecalendar"]
     assert await svc.calendar.connected_user_ids([svc.mario, anna]) == {"famiglia-111"}
-    assert svc.composio.list_calls[0]["statuses"] == ["ACTIVE"]
+    assert svc.composio.list_calls[0]["toolkit_slugs"] == ["googlecalendar"]
+
+
+async def test_expired_or_revoked_connection_does_not_count_as_connected(make):
+    svc = make(FakeComposio(connected=set(), expired={"famiglia-111"}))
+    assert await svc.calendar.is_connected(svc.mario) is False
+    with pytest.raises(CalendarError, match="non è ancora collegato"):
+        await svc.calendar.create_event(svc.mario, "2026-11-03T09:30", "Visita", now=NOW)
 
 
 async def test_list_calendars(make):

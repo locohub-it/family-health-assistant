@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from ..auth import set_password, verify_password
 from ..calendar import CalendarError
 from ..clock import TIMEZONE
+from ..documents import DEFAULT_DOCUMENTS_DIR
 from ..service import Service
 from ..storage import StorageError
 
@@ -147,7 +148,15 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
 
     @app.get("/")
     async def status(request: Request) -> Response:
-        return page(request, "stato.html", active="stato", activity=service.recent_activity(50), users=service.users.all())
+        return page(
+            request,
+            "stato.html",
+            active="stato",
+            activity=service.recent_activity(50),
+            users=service.users.all(),
+            default_dir=DEFAULT_DOCUMENTS_DIR,
+            folder_problem=folder_problem(),
+        )
 
     # --- Chiavi API --------------------------------------------------------------
 
@@ -166,11 +175,33 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             flash(request, "error", "Modello Gemini: inserisci un nome valido, ad esempio gemini-3.8-flash")
             return back("/api")
         values["gemini_model"] = model
+        fallback = form.get("gemini_fallback_model", "").strip()
+        if len(fallback) > 80 or " " in fallback:
+            flash(request, "error", "Modello di riserva: inserisci un nome valido oppure lascia vuoto")
+            return back("/api")
+        values["gemini_fallback_model"] = fallback
         settings.update(values)
         flash(request, "ok", "Chiavi salvate")
         return back("/api")
 
     # --- Utenti ------------------------------------------------------------------
+
+    def error_text(exc: BaseException) -> str:
+        """Messaggio + dettaglio tecnico: la pagina è solo per l'amministratore."""
+        if isinstance(exc, CalendarError) and str(exc) != exc.user_message:
+            return f"{exc.user_message} ({exc})"
+        return exc.user_message if isinstance(exc, CalendarError) else f"{type(exc).__name__}: {exc}"
+
+    def folder_problem() -> str:
+        """Se la cartella scelta non è utilizzabile: il motivo. Vuoto se va bene o se si usa la predefinita."""
+        chosen = settings.get("documents_dir")
+        if not chosen or not service.storage.available:
+            return ""
+        try:
+            service.storage.check_writable(chosen)
+        except StorageError as exc:
+            return str(exc)
+        return ""
 
     def find_user(user_id: int):
         user = service.users.get(user_id)
@@ -182,21 +213,39 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
     async def users_page(request: Request) -> Response:
         require_login(request)
         users = service.users.all()
-        connected, calendar_note = None, ""
+        states: dict[int, dict] = {}
         if service.calendar.enabled:
-            try:
-                connected = await service.calendar.connected_user_ids(users)
-            except CalendarError as exc:  # Composio irraggiungibile: la pagina deve comunque aprirsi
-                calendar_note = exc.user_message
+            # Un controllo per utente, così un errore su uno non oscura gli altri e mostra la causa vera.
+            results = await asyncio.gather(*(service.calendar.is_connected(u) for u in users), return_exceptions=True)
+            for user, result in zip(users, results):
+                if isinstance(result, BaseException):
+                    states[user.id] = {"state": "error", "detail": error_text(result)}
+                else:
+                    states[user.id] = {"state": "ok" if result else "no", "detail": ""}
         return page(
             request,
             "utenti.html",
             active="utenti",
             users=users,
-            connected=connected,
+            states=states,
             calendar_enabled=service.calendar.enabled,
-            calendar_note=calendar_note,
         )
+
+    @app.post("/utenti/{user_id}/aggiorna")
+    async def calendar_refresh(request: Request, user_id: int) -> Response:
+        """Ricontrolla ora il collegamento Google di questa persona."""
+        await checked_form(request)
+        user = find_user(user_id)
+        try:
+            connected = await service.calendar.is_connected(user)
+        except Exception as exc:  # noqa: BLE001 - qualunque errore va mostrato, non nascosto
+            flash(request, "error", f"{user.name}: non riesco a verificare. {error_text(exc)}")
+        else:
+            if connected:
+                flash(request, "ok", f"{user.name}: Google Calendar collegato")
+            else:
+                flash(request, "info", f"{user.name}: Google Calendar non ancora collegato. Premi Collega.")
+        return back("/utenti")
 
     @app.post("/utenti")
     async def users_add(request: Request) -> Response:
@@ -289,6 +338,8 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             crumbs=breadcrumbs(here),
             storage_error=error,
             root=str(storage.root),
+            default_dir=DEFAULT_DOCUMENTS_DIR,
+            folder_problem=folder_problem(),
         )
 
     @app.post("/cartella/nuova")
@@ -301,6 +352,13 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         except StorageError as exc:
             flash(request, "error", str(exc))
             return back(f"/cartella?p={here}")
+
+    @app.post("/cartella/predefinita")
+    async def folder_default(request: Request) -> Response:
+        await checked_form(request)
+        settings.update({"documents_dir": ""})
+        flash(request, "ok", f"Si torna alla cartella predefinita: {DEFAULT_DOCUMENTS_DIR}")
+        return back("/cartella")
 
     @app.post("/cartella/scegli")
     async def folder_choose(request: Request) -> Response:

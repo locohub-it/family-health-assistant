@@ -30,6 +30,8 @@ SUPPORTED_MIME = {
 }
 MAX_BYTES = 15 * 1024 * 1024
 
+DEFAULT_DOCUMENTS_DIR = "Documenti"  # dentro la radice: si usa se non ne è stata scelta un'altra
+FALLBACK_PREFIX = "@volume/"  # ultima spiaggia: la cartella nel volume dei dati, sempre scrivibile
 FOLDERS = {"appuntamento": "Appuntamenti", "referto": "Referti", "ricetta": "Ricette", "altro": "Altro"}
 TITLES = re.compile(r"\b(sig\.ra|dott\.ssa|signora|signor|sigg|sig|dott|dr|prof|paziente)\b\.?", re.IGNORECASE)
 
@@ -89,7 +91,9 @@ class DocumentService:
         gemini: DocumentReader,
         log: Callable[[str, str], None],
         calendar: Calendar | None = None,
+        fallback: Storage | None = None,
     ) -> None:
+        self._fallback = fallback
         self._settings = settings
         self._users = users
         self._storage = storage
@@ -103,11 +107,6 @@ class DocumentService:
             return Outcome("Questo tipo di file non lo so leggere. Mandami una foto o un PDF del documento.")
         if len(data) > MAX_BYTES:
             return Outcome("Il file è troppo grande. Prova con una foto più leggera.")
-        base = self._settings.get("documents_dir")
-        if not base:
-            # Meglio dirlo subito che leggere il documento e poi non sapere dove metterlo.
-            return Outcome("Il bot non è ancora pronto: chi lo gestisce deve scegliere la cartella dei documenti.")
-
         extraction = await self._gemini.analyze_document(data, mime)
         if extraction.kind == "illeggibile":
             self._log("documento", f"{sender.name}: illeggibile")
@@ -120,15 +119,42 @@ class DocumentService:
         doc_date = _valid_date(extraction.document_date)
         kind = extraction.kind
         filename = f"{doc_date or clock.now().strftime('%Y-%m-%d')}_{kind}{SUPPORTED_MIME[mime]}"
-        saved_path = await asyncio.to_thread(
-            self._storage.save, base, [patient.name, FOLDERS[kind]], filename, data
-        )
+        saved_path = await self._save_file([patient.name, FOLDERS[kind]], filename, data)
         document_id = self._records.add_document(
             patient.id, sender.telegram_id, kind, saved_path, doc_date, extraction.summary, extraction.model_dump_json()
         )
         text = await self._save_details(document_id, patient, extraction, doc_date)
         self._log("documento", f"{patient.name}: {kind}")
         return Outcome(note + text, document_id)
+
+    async def _save_file(self, parts: list[str], filename: str, data: bytes) -> str:
+        """Salva il file: cartella scelta, poi quella predefinita, poi il volume dei dati.
+
+        Un percorso sbagliato non deve arrivare in chat: si prova la successiva e l'errore va nel registro.
+        """
+        chosen = self._settings.get("documents_dir") or DEFAULT_DOCUMENTS_DIR
+        attempts: list[tuple[Storage, str, str]] = [(self._storage, chosen, "")]
+        if chosen != DEFAULT_DOCUMENTS_DIR:
+            attempts.append((self._storage, DEFAULT_DOCUMENTS_DIR, ""))
+        if self._fallback is not None:
+            attempts.append((self._fallback, ".", FALLBACK_PREFIX))
+        failures: list[str] = []
+        for storage, folder, prefix in attempts:
+            try:
+                saved = await asyncio.to_thread(storage.save, folder, parts, filename, data)
+            except StorageError as exc:
+                failures.append(f"«{folder if not prefix else 'volume dei dati'}»: {exc}")
+                continue
+            if failures:
+                self._log("errore", f"Cartella non utilizzabile ({'; '.join(failures)}). Salvato in {prefix + saved}")
+            return prefix + saved
+        raise StorageError("; ".join(failures))
+
+    def _delete_file(self, path: str) -> None:
+        if path.startswith(FALLBACK_PREFIX) and self._fallback is not None:
+            self._fallback.delete(path.removeprefix(FALLBACK_PREFIX))
+        else:
+            self._storage.delete(path)
 
     def _resolve_patient(self, patient_name: str, sender: User) -> tuple[User, str]:
         """Di chi è il documento: se porta il nome di un altro familiare, è suo."""
@@ -214,7 +240,7 @@ class DocumentService:
         warning = await self._remove_calendar_events(document)
         self._records.delete_document(document_id)
         try:
-            await asyncio.to_thread(self._storage.delete, document["file_path"])
+            await asyncio.to_thread(self._delete_file, document["file_path"])
         except StorageError:
             pass  # il file non si cancella ma i dati sì: meglio dell'opposto
         self._log("annullato", f"documento {document_id}")

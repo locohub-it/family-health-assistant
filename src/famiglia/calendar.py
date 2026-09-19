@@ -114,9 +114,10 @@ class Calendar:
 
         def call() -> set[str]:
             found = self._composio().connected_accounts.list(
-                user_ids=[u.composio_user_id for u in users], toolkit_slugs=[TOOLKIT], statuses=["ACTIVE"]
+                user_ids=[u.composio_user_id for u in users], toolkit_slugs=[TOOLKIT]
             )
-            return {item.user_id for item in found.items}
+            # Lo stato si filtra qui: un collegamento scaduto o revocato non conta come collegato.
+            return {item.user_id for item in (found.items or []) if str(item.status).upper() == "ACTIVE"}
 
         return await self._run(call)
 

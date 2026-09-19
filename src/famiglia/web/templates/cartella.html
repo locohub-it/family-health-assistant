@@ -7,8 +7,18 @@
 
 <div class="card">
   <h2>In uso</h2>
-  <p>{% if s.get('documents_dir') %}<span class="badge ok">{{ 'Radice' if s.get('documents_dir') == '.' else s.get('documents_dir') }}</span>
-     {% else %}<span class="badge error">non scelta</span>{% endif %}</p>
+  {% if s.get('documents_dir') %}
+  <p><span class="badge ok">{{ 'Radice' if s.get('documents_dir') == '.' else s.get('documents_dir') }}</span></p>
+  <form method="post" action="/cartella/predefinita" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button>Torna alla predefinita ({{ default_dir }})</button>
+  </form>
+  {% else %}
+  <p><span class="badge ok">{{ default_dir }}</span> <span class="hint">predefinita: la crea il bot da solo dentro la radice</span></p>
+  {% endif %}
+  {% if folder_problem %}
+  <div class="flash error">La cartella scelta non è utilizzabile ({{ folder_problem }}). Finché non la sistemi i documenti
+    vanno nella cartella «{{ default_dir }}» e l'errore non arriva in chat.</div>
+  {% endif %}
 </div>
 
 {% if storage_error %}

@@ -21,6 +21,11 @@
       conviene un progetto con fatturazione attiva.</div>
     <label for="gemini_model">Modello</label>
     <input id="gemini_model" name="gemini_model" type="text" value="{{ s.get('gemini_model') }}" required>
+    <label for="gemini_fallback_model">Modello di riserva <span class="hint">(facoltativo)</span></label>
+    <input id="gemini_fallback_model" name="gemini_fallback_model" type="text" value="{{ s.get('gemini_fallback_model') }}">
+    <div class="hint">Se il modello principale ha finito le richieste gratuite o non risponde, il bot prova questo.
+      Sul piano gratuito i limiti sono per modello, quindi un secondo modello raddoppia le richieste disponibili.
+      Lascia vuoto per non usarne uno.</div>
   </div>
 
   <div class="card">

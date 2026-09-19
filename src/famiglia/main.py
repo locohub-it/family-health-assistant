@@ -26,6 +26,7 @@ async def run() -> None:
     except (RuntimeError, ValueError) as exc:
         # Configurazione sbagliata (SECRET_KEY o ADMIN_PASSWORD dello stack): una riga chiara, non un traceback.
         sys.exit(f"ERRORE DI CONFIGURAZIONE: {exc}. Correggi le variabili dello stack e riavvia.")
+    service.ensure_default_folder()
 
     app = create_app(
         service,

@@ -16,9 +16,12 @@ DEFAULTS: dict[str, str] = {
     # Gemini
     "gemini_api_key": "",
     "gemini_model": "gemini-3.8-flash",
+    # Se il modello principale ha finito la quota o non risponde, si prova questo (vuoto = nessuno)
+    "gemini_fallback_model": "gemini-3.5-flash-lite",
     # Composio (Google Calendar)
     "composio_api_key": "",
-    # Dove salvare le foto dei documenti, relativo alla radice montata in /storage ("." = la radice)
+    # Dove salvare le foto dei documenti, relativo alla radice montata in /storage ("." = la radice).
+    # Vuoto = la cartella predefinita «Documenti» dentro la radice.
     "documents_dir": "",
     # Pannello
     "admin_password_hash": "",
@@ -30,7 +33,6 @@ BOT_KEYS = {"bot_token"}
 REQUIRED_FOR_RUN = {
     "bot_token": "Token del bot Telegram",
     "gemini_api_key": "Chiave API Gemini",
-    "documents_dir": "Cartella dei documenti",
 }
 
 

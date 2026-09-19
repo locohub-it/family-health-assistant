@@ -42,8 +42,9 @@ class FakeReader:
 class FakeComposio:
     """Al posto di Composio: registra le chiamate e risponde come da documentazione."""
 
-    def __init__(self, connected=(), calendars=None, execute_error=None, link="https://connect.composio.dev/link/ln_abc"):
+    def __init__(self, connected=(), calendars=None, execute_error=None, link="https://connect.composio.dev/link/ln_abc", expired=()):
         self.connected = set(connected)
+        self.expired = set(expired)
         self.calendars = calendars if calendars is not None else [
             {"id": "mario@example.com", "summary": "Mario", "primary": True},
             {"id": "famiglia@group.calendar.google.com", "summary": "Famiglia", "primary": False},
@@ -80,7 +81,9 @@ class FakeComposio:
 
         self.list_calls.append(kwargs)
         wanted = set(kwargs["user_ids"])
-        return SimpleNamespace(items=[SimpleNamespace(user_id=u) for u in self.connected if u in wanted])
+        items = [SimpleNamespace(user_id=u, status="ACTIVE") for u in self.connected if u in wanted]
+        items += [SimpleNamespace(user_id=u, status="EXPIRED") for u in self.expired if u in wanted]
+        return SimpleNamespace(items=items)
 
 
 class FakeAnswerer:
