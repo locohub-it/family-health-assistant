@@ -401,3 +401,14 @@ async def test_unknown_command_from_a_stranger_gets_nothing(svc):
     message = Replies()
     await svc.bot._unknown_command(command_update(999, message), None)
     assert message.texts == []
+
+
+async def test_a_provider_that_cannot_hear_voice_notes_tells_the_user_kindly(asker):
+    from famiglia.ai import AiError
+
+    asker.answerer.error = AiError("Con DeepSeek non posso ascoltare i vocali: scrivimi la domanda.")
+    voice = AskMessage(data=b"OggS").attachment("audio/ogg", 5000)
+    message = AskMessage(voice=voice, data=b"OggS")
+    await asker.bot._voice(ask_update(111, message), None)
+    assert message.replies[0].text == "Con DeepSeek non posso ascoltare i vocali: scrivimi la domanda."
+    assert asker.recent_activity(1)[0]["kind"] == "errore"

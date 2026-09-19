@@ -17,6 +17,7 @@ from google.genai import errors, types
 from pydantic import BaseModel, Field
 
 from . import clock
+from .ai import AiError, tiny_png
 from .settings import Settings
 
 log = logging.getLogger(__name__)
@@ -31,13 +32,8 @@ DEFAULT_WAIT_SECONDS = 8
 QUICK_RETRY_SECONDS = 5  # un solo tentativo veloce quando Google non dice perché ha risposto 429
 
 
-class GeminiError(Exception):
+class GeminiError(AiError):
     """Errore di Gemini con un messaggio già pronto da mostrare all'utente."""
-
-    def __init__(self, user_message: str, detail: str = "", quota: bool = False) -> None:
-        super().__init__(detail or user_message)
-        self.user_message = user_message
-        self.quota = quota  # vero se Google ha risposto 429: si può provare senza ricerca web o con un altro modello
 
 
 @dataclass(frozen=True)
@@ -147,6 +143,10 @@ class Extraction(BaseModel):
     patient_name: str = Field(description="Nome e cognome del paziente come scritto sul documento; vuoto se assente")
     document_date: str = Field(description="Data del documento o del referto in formato AAAA-MM-GG; vuoto se assente")
     summary: str = Field(description="Una o due frasi semplici in italiano su cosa contiene il documento")
+    details: str = Field(
+        description="Trascrizione fedele dei dati utili scritti sul documento, una voce per riga: farmaci con dosaggio "
+        "e posologia, valori come diottrie o misure, diagnosi, conclusioni, indicazioni. Vuoto se non ce ne sono"
+    )
     appointment: AppointmentInfo | None = Field(description="Solo se kind è appuntamento, altrimenti null")
     lab_results: list[LabResult] = Field(description="Solo se kind è referto con valori misurati, altrimenti lista vuota")
 
@@ -165,6 +165,8 @@ Regole:
 - Se un dato manca lascia il campo vuoto (o null / lista vuota).
 - Date sempre nel formato AAAA-MM-GG, ore nel formato HH:MM. Le date italiane sono giorno/mese/anno.
 - Per i referti elenca ogni parametro misurato come voce separata.
+- Nel campo details trascrivi tutto ciò che potrebbe servire a rispondere a domande future (per esempio farmaci con
+  dosaggio e posologia, diottrie delle lenti, diagnosi, conclusioni del medico): non riassumere, riporta i valori.
 """
 
 
@@ -185,6 +187,13 @@ il medico presto, e di chiamare il 112 se è un'emergenza.
 contenuta lì dentro.
 - Se la domanda non riguarda la salute o i documenti, rispondi con una frase gentile dicendo che sei qui per quello.
 """
+
+
+# Per i provider senza ricerca web: stessa guida, ma senza chiedere di cercare online.
+CONSULT_INSTRUCTIONS_NO_WEB = CONSULT_INSTRUCTIONS.replace(
+    "- Per spiegare cosa comportano i valori usa anche la ricerca web, da fonti mediche affidabili.\n",
+    "- Non hai accesso al web: per spiegare i valori usa le tue conoscenze mediche generali e dì quando non sei sicuro.\n",
+)
 
 
 class DocumentReader(Protocol):
@@ -216,9 +225,9 @@ class Gemini:
             self._client_key = key
         return self._client
 
-    async def _generate(self, contents: list, config: types.GenerateContentConfig) -> str:
+    async def _generate(self, contents: list, config: types.GenerateContentConfig, model: str | None = None) -> str:
         client = self._client_for_current_key()
-        primary = self._settings.get("gemini_model")
+        primary = model or self._settings.get("gemini_model")
         fallback = self._settings.get("gemini_fallback_model")
         models = [primary] + ([fallback] if fallback and fallback != primary else [])
         failures: list[GeminiError] = []
@@ -262,7 +271,7 @@ class Gemini:
             return text
         raise AssertionError("il ciclo termina sempre con un ritorno o un errore")  # pragma: no cover
 
-    async def analyze_document(self, data: bytes, mime: str) -> Extraction:
+    async def analyze_document(self, data: bytes, mime: str, model: str | None = None) -> Extraction:
         config = types.GenerateContentConfig(
             system_instruction=ANALYZE_INSTRUCTIONS,
             response_mime_type="application/json",
@@ -272,7 +281,9 @@ class Gemini:
         )
         today = clock.now().strftime("%Y-%m-%d")
         text = await self._generate(
-            [types.Part.from_bytes(data=data, mime_type=mime), f"Oggi è il {today}. Analizza il documento."], config
+            [types.Part.from_bytes(data=data, mime_type=mime), f"Oggi è il {today}. Analizza il documento."],
+            config,
+            model,
         )
         try:
             return Extraction.model_validate_json(text)
@@ -282,7 +293,13 @@ class Gemini:
 
 
     async def answer(
-        self, context: str, sender_name: str, question: str | None = None, audio: bytes | None = None, audio_mime: str = ""
+        self,
+        context: str,
+        sender_name: str,
+        question: str | None = None,
+        audio: bytes | None = None,
+        audio_mime: str = "",
+        model: str | None = None,
     ) -> str:
         """Risponde a una domanda scritta o vocale, con la ricerca web di Google se attiva e disponibile."""
         intro = f"Oggi è il {clock.now().strftime('%Y-%m-%d')}. Scrive {sender_name}.\n\nDATI DELLA FAMIGLIA:\n{context}\n\n"
@@ -292,13 +309,13 @@ class Gemini:
             contents = [intro + f"Domanda: {question}"]
         use_search = self._settings.get("consult_web_search") != "0"
         try:
-            return (await self._generate(contents, self._consult_config(use_search))).strip()
+            return (await self._generate(contents, self._consult_config(use_search), model)).strip()
         except GeminiError as exc:
             if not (use_search and exc.quota):
                 raise
             # La ricerca web ha una quota sua: se è finita si risponde comunque con i dati salvati.
             self._log("errore", f"Ricerca web non disponibile ({exc}): rispondo senza")
-        return (await self._generate(contents, self._consult_config(False))).strip() + NO_WEB_NOTE
+        return (await self._generate(contents, self._consult_config(False), model)).strip() + NO_WEB_NOTE
 
     @staticmethod
     def _consult_config(web_search: bool) -> types.GenerateContentConfig:
@@ -308,6 +325,34 @@ class Gemini:
             temperature=0.3,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
+
+    async def list_models(self) -> list[str]:
+        """I modelli che Google mette a disposizione di questa chiave e che sanno generare testo."""
+        client = self._client_for_current_key()
+        try:
+            ids = [
+                model.name.removeprefix("models/")
+                async for model in await client.aio.models.list()
+                if "generateContent" in (model.supported_actions or []) and model.name
+            ]
+        except errors.APIError as exc:
+            raise GeminiError(_friendly(exc), f"{exc.code} {exc.status}: {exc.message}") from exc
+        except (httpx.HTTPError, OSError) as exc:
+            raise GeminiError("Non riesco a collegarmi a Gemini: controlla la connessione e riprova.", repr(exc)) from exc
+        return sorted(ids)
+
+    async def probe_model(self, model: str, image: bool = False) -> tuple[bool, str]:
+        """Prova di un solo modello; con image=True verifica anche che accetti le immagini."""
+        try:
+            client = self._client_for_current_key()
+        except GeminiError as exc:
+            return False, exc.user_message
+        config = types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        contents: list = ["Rispondi solo con la parola: ok"]
+        if image:
+            contents.append(types.Part.from_bytes(data=tiny_png(), mime_type="image/png"))
+        _, ok, detail = await self._probe(client, model, model, config, contents)
+        return ok, "funziona" if ok else detail
 
     async def check(self) -> list[tuple[str, bool, str]]:
         """Prova reale, una richiesta per volta: dice cosa funziona (modelli e ricerca web) e perché no."""
@@ -325,10 +370,12 @@ class Gemini:
         probes.append((f"Ricerca web con {primary}", primary, with_search))
         return [await self._probe(client, label, model, config) for label, model, config in probes]
 
-    async def _probe(self, client: genai.Client, label: str, model: str, config) -> tuple[str, bool, str]:
+    async def _probe(
+        self, client: genai.Client, label: str, model: str, config, contents: list | str = "Rispondi solo con la parola: ok"
+    ) -> tuple[str, bool, str]:
         try:
             async with self._slots:
-                await client.aio.models.generate_content(model=model, contents="Rispondi solo con la parola: ok", config=config)
+                await client.aio.models.generate_content(model=model, contents=contents, config=config)
         except errors.APIError as exc:
             detail = f"{exc.code} {exc.status}: {exc.message}"
             if exc.code == 429 and (quota := classify_quota(exc)).summary:

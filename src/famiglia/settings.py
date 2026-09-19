@@ -20,6 +20,16 @@ DEFAULTS: dict[str, str] = {
     "gemini_fallback_model": "gemini-3.5-flash-lite",
     # Se la ricerca web di Google ha finito la quota, le risposte usano solo i dati salvati ("0" = mai la ricerca web)
     "consult_web_search": "1",
+    # Intelligenza artificiale per funzione: provider (gemini, groq, deepseek, custom) e modello
+    "ai_docs_provider": "gemini",
+    "ai_docs_model": "",
+    "ai_chat_provider": "gemini",
+    "ai_chat_model": "",
+    "groq_api_key": "",
+    "deepseek_api_key": "",
+    "custom_api_key": "",
+    "custom_base_url": "",
+    "ai_models_cache": "",  # elenco dei modelli per provider, ricavato dal provider stesso (JSON)
     # Composio (Google Calendar)
     "composio_api_key": "",
     # Utente che riceve sul proprio calendario le visite di tutta la famiglia (id dell'utente; vuoto = nessuno)
@@ -31,7 +41,7 @@ DEFAULTS: dict[str, str] = {
     "admin_password_hash": "",
 }
 
-SECRET_KEYS = {"bot_token", "gemini_api_key", "composio_api_key"}
+SECRET_KEYS = {"bot_token", "gemini_api_key", "composio_api_key", "groq_api_key", "deepseek_api_key", "custom_api_key"}
 BOT_KEYS = {"bot_token"}
 
 REQUIRED_FOR_RUN = {

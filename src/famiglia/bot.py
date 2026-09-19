@@ -23,7 +23,7 @@ from telegram.ext import (
 from .calendar import Calendar, CalendarError
 from .consult import Consultant, split_message
 from .documents import MAX_BYTES, SUPPORTED_MIME, DocumentService
-from .gemini import GeminiError
+from .ai import AiError
 from .settings import Settings
 from .storage import StorageError
 from .users import User, UserStore
@@ -240,9 +240,9 @@ class BotRunner:
         markup = None
         try:
             text, markup = await job()
-        except GeminiError as exc:
+        except AiError as exc:
             text = exc.user_message
-            self._note("errore", f"Gemini: {exc}")
+            self._note("errore", f"IA: {exc}")
         except StorageError as exc:
             text = "Non riesco a salvare il documento nella cartella scelta. Avvisa chi gestisce il bot."
             self._note("errore", f"Salvataggio: {exc}")

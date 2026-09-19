@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Modelli IA{% endblock %}
+{% block content %}
+<h1>Modelli IA</h1>
+<p class="hint">Scegli quale servizio usa il bot per ciascuna funzione. Inserisci la chiave, premi
+  <b>Salva e cerca i modelli</b>: il pannello chiede al servizio quali modelli ha a disposizione e sceglie da solo
+  quello adatto. Poi con <b>Prova</b> verifichi che funzioni davvero.</p>
+
+<form method="post" action="/ia">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+
+  <div class="card">
+    <h2>Servizi e chiavi</h2>
+    <p class="hint"><b>Google Gemini</b>: la chiave sta in <a href="/api">Chiavi API</a>.</p>
+    <label for="groq_api_key">Groq {% if s.is_set('groq_api_key') %}<span class="badge ok">chiave impostata</span>{% endif %}</label>
+    <input id="groq_api_key" name="groq_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('groq_api_key') else 'gsk_…' }}">
+    <label for="deepseek_api_key">DeepSeek {% if s.is_set('deepseek_api_key') %}<span class="badge ok">chiave impostata</span>{% endif %}</label>
+    <input id="deepseek_api_key" name="deepseek_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('deepseek_api_key') else 'sk-…' }}">
+    <label for="custom_base_url">Altro servizio compatibile OpenAI <span class="hint">(OpenRouter, Ollama sul tuo server…)</span></label>
+    <input id="custom_base_url" name="custom_base_url" type="text" value="{{ s.get('custom_base_url') }}" placeholder="https://…/v1">
+    <label for="custom_api_key">Chiave dell'altro servizio {% if s.is_set('custom_api_key') %}<span class="badge ok">impostata</span>{% endif %}</label>
+    <input id="custom_api_key" name="custom_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('custom_api_key') else '' }}">
+  </div>
+
+  {% for role, label in roles.items() %}
+  {% set c = current[role] %}
+  <div class="card">
+    <h2>{{ label }}</h2>
+    {% if role == 'docs' %}
+    <p class="hint">Legge foto e PDF dei documenti. Serve un modello con <b>visione</b> per le foto; i PDF con testo li
+      leggono anche i modelli solo testo. Con <b>Prova</b> vedi se il modello accetta le immagini.</p>
+    {% else %}
+    <p class="hint">Risponde alle domande scritte e ai vocali. I vocali si trascrivono con il modello Whisper del servizio, se
+      ne ha uno (Groq sì). La ricerca web di Google c'è solo con Gemini.</p>
+    {% endif %}
+    <label for="ai_{{ role }}_provider">Servizio</label>
+    <select id="ai_{{ role }}_provider" name="ai_{{ role }}_provider">
+      {% for key, p in providers.items() %}<option value="{{ key }}" {{ 'selected' if c.provider == key }}>{{ p.label }}</option>{% endfor %}
+    </select>
+    <div class="hint">Cambiando servizio il modello si sceglie da solo al salvataggio.</div>
+    <label for="ai_{{ role }}_model_select">Modello</label>
+    {% if c.models or c.model %}
+    <select id="ai_{{ role }}_model_select" name="ai_{{ role }}_model_select">
+      {% if c.provider == 'gemini' %}<option value="" {{ 'selected' if not c.model }}>Predefinito ({{ s.get('gemini_model') }})</option>{% endif %}
+      {% if c.model and c.model not in c.models %}<option value="{{ c.model }}" selected>{{ c.model }} (attuale)</option>{% endif %}
+      {% for m in c.models %}<option value="{{ m }}" {{ 'selected' if m == c.model }}>{{ m }}</option>{% endfor %}
+    </select>
+    <div class="hint">{{ c.models | length }} modelli trovati nel servizio.</div>
+    {% else %}
+    <p class="hint">Nessun modello ancora: salva la chiave e premi «Salva e cerca i modelli».</p>
+    {% endif %}
+    <label for="ai_{{ role }}_model_manual">…oppure scrivi il nome <span class="hint">(facoltativo, ha la precedenza)</span></label>
+    <input id="ai_{{ role }}_model_manual" name="ai_{{ role }}_model_manual" type="text" autocomplete="off" placeholder="{{ c.model or 'nome esatto del modello' }}">
+  </div>
+  {% endfor %}
+
+  <div class="actions"><button class="primary">Salva e cerca i modelli</button></div>
+</form>
+
+<div class="grid">
+  {% for role, label in roles.items() %}
+  <form method="post" action="/ia/prova/{{ role }}" class="card">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <h2>Prova: {{ label | lower }}</h2>
+    <p class="hint">Fa una piccola richiesta vera al modello scelto{% if role == 'docs' %}, con un'immagine{% endif %} e mostra l'esito.
+      Salva prima le modifiche.</p>
+    <div class="actions"><button>Prova ora</button></div>
+  </form>
+  {% endfor %}
+</div>
+{% endblock %}

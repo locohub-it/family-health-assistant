@@ -5,24 +5,26 @@ def lab(name="Glicemia", value="95", unit="mg/dL", reference="70-100", flag=""):
     return LabResult(name=name, value=value, unit=unit, reference=reference, flag=flag)
 
 
-def referto(patient="", date="2025-10-25", results=None, summary="Esami del sangue di routine."):
+def referto(patient="", date="2025-10-25", results=None, summary="Esami del sangue di routine.", details=""):
     results = results if results is not None else [lab(), lab("Colesterolo totale", "240", "mg/dL", "<200", "alto")]
     return Extraction(
-        kind="referto", patient_name=patient, document_date=date, summary=summary, appointment=None, lab_results=results
+        kind="referto", patient_name=patient, document_date=date, summary=summary, details=details, appointment=None,
+        lab_results=results,
     )
 
 
 def appuntamento(patient="", date="2026-11-03", time="09:30", title="Visita cardiologica", place="Ospedale Nord", notes=""):
     info = AppointmentInfo(title=title, date=date, time=time, place=place, notes=notes)
     return Extraction(
-        kind="appuntamento", patient_name=patient, document_date="", summary="Prenotazione visita.", appointment=info,
-        lab_results=[],
+        kind="appuntamento", patient_name=patient, document_date="", summary="Prenotazione visita.", details="",
+        appointment=info, lab_results=[],
     )
 
 
-def altro(kind="altro", patient=""):
+def altro(kind="altro", patient="", details="", date=""):
     return Extraction(
-        kind=kind, patient_name=patient, document_date="", summary="Un documento.", appointment=None, lab_results=[]
+        kind=kind, patient_name=patient, document_date=date, summary="Un documento.", details=details, appointment=None,
+        lab_results=[],
     )
 
 
@@ -98,3 +100,24 @@ class FakeAnswerer:
         if self.error:
             raise self.error
         return self.reply
+
+
+def make_pdf(text: str) -> bytes:
+    """Un PDF minimo ma valido, con del testo selezionabile (senza parentesi nel testo)."""
+    stream = f"BT /F1 12 Tf 20 100 Td ({text}) Tj ET"
+    objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out, offsets = b"%PDF-1.4\n", []
+    for number, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets)
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode()
+    return out

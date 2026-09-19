@@ -14,12 +14,20 @@ class Records:
         self._db = db
 
     def add_document(
-        self, user_id: int, sender_telegram_id: int, kind: str, file_path: str, doc_date: str, summary: str, raw_json: str
+        self,
+        user_id: int,
+        sender_telegram_id: int,
+        kind: str,
+        file_path: str,
+        doc_date: str,
+        summary: str,
+        raw_json: str,
+        details: str = "",
     ) -> int:
         return self._db.execute_returning_id(
-            "INSERT INTO documents (user_id, sender_telegram_id, kind, file_path, doc_date, summary, raw_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (user_id, sender_telegram_id, kind, file_path, doc_date, summary, raw_json, time.time()),
+            "INSERT INTO documents (user_id, sender_telegram_id, kind, file_path, doc_date, summary, raw_json, created_at, details) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, sender_telegram_id, kind, file_path, doc_date, summary, raw_json, time.time(), details),
         )
 
     def add_lab_results(self, document_id: int, user_id: int, result_date: str, results: Iterable[LabResult]) -> int:

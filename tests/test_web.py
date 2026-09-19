@@ -7,7 +7,7 @@ from famiglia.auth import set_password
 from famiglia.web.app import create_app
 
 PASSWORD = "password-lunga-123"
-PAGES = ("/", "/api", "/utenti", "/cartella", "/password")
+PAGES = ("/", "/api", "/ia", "/utenti", "/cartella", "/password")
 
 
 @pytest.fixture
@@ -396,3 +396,133 @@ def test_coordinator_route_requires_login_and_csrf(cal_client):
     assert client.post("/utenti/coordinatore", data={"user_id": "1"}, follow_redirects=False).status_code == 303
     login(client)
     assert client.post("/utenti/coordinatore", data={"user_id": "1"}).status_code == 403
+
+
+# --- Modelli IA ----------------------------------------------------------------
+
+GROQ_LIST = {"data": [{"id": "llama-3.3-70b-versatile"}, {"id": "meta-llama/llama-4-scout-17b-16e-instruct"}, {"id": "whisper-large-v3"}, {"id": "playai-tts"}]}
+DEEPSEEK_LIST = {"data": [{"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]}
+
+
+@pytest.fixture
+def ia_client(tmp_path, root):
+    """Pannello con Groq e DeepSeek finti: l'elenco dei modelli dipende dal servizio interpellato."""
+    import httpx
+
+    from famiglia.service import Service
+
+    def respond(request):
+        if request.url.path.endswith("/models"):
+            body = GROQ_LIST if "groq" in request.url.host else DEEPSEEK_LIST
+            return httpx.Response(401, json={"error": {"message": "Invalid API Key"}}) if request.headers["authorization"].endswith("SBAGLIATA") else httpx.Response(200, json=body)
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+
+    service = Service(tmp_path / "data", "chiave-di-test", root, ai_http=httpx.AsyncClient(transport=httpx.MockTransport(respond)))
+    set_password(service.settings, PASSWORD)
+    client = TestClient(create_app(service, secret_key="chiave-di-test", admin_user="admin"))
+    return client, service
+
+
+def test_ai_page_renders_and_requires_login(ia_client):
+    client, _ = ia_client
+    assert client.get("/ia", follow_redirects=False).status_code == 303
+    login(client)
+    html = client.get("/ia").text
+    assert "Modelli IA" in html and "Salva e cerca i modelli" in html and "Groq" in html and "DeepSeek" in html
+
+
+def test_saving_a_key_finds_the_models_and_picks_them_by_itself(ia_client):
+    client, service = ia_client
+    token = login(client)
+    response = client.post("/ia", data={"csrf": token, "groq_api_key": "gsk_buona", "ai_docs_provider": "groq", "ai_chat_provider": "groq"})
+    assert "scelto meta-llama/llama-4-scout-17b-16e-instruct" in response.text and "scelto llama-3.3-70b-versatile" in response.text
+    assert (service.ai.provider("docs"), service.ai.model("docs")) == ("groq", "meta-llama/llama-4-scout-17b-16e-instruct")
+    assert service.ai.model("chat") == "llama-3.3-70b-versatile"
+    html = client.get("/ia").text
+    assert "4 modelli trovati" not in html and "3 modelli trovati" in html or "modelli trovati nel servizio" in html
+    assert "whisper-large-v3" in html  # ora c'è il menu con l'elenco
+
+
+def test_changing_the_service_drops_the_old_model_and_picks_a_new_one(ia_client):
+    client, service = ia_client
+    token = login(client)
+    client.post("/ia", data={"csrf": token, "groq_api_key": "gsk", "deepseek_api_key": "sk", "ai_docs_provider": "groq", "ai_chat_provider": "groq"})
+    client.post("/ia", data={"csrf": token, "ai_docs_provider": "groq", "ai_chat_provider": "deepseek",
+                             "ai_chat_model_select": "llama-3.3-70b-versatile"})  # il vecchio valore del menu non vale più
+    assert (service.ai.provider("chat"), service.ai.model("chat")) == ("deepseek", "deepseek-chat")
+    assert service.ai.model("docs") == "meta-llama/llama-4-scout-17b-16e-instruct"  # invariato
+
+
+def test_a_typed_model_name_wins_over_the_menu_and_is_kept_even_if_not_listed(ia_client):
+    client, service = ia_client
+    token = login(client)
+    client.post("/ia", data={"csrf": token, "groq_api_key": "gsk", "ai_docs_provider": "groq", "ai_chat_provider": "groq"})
+    response = client.post("/ia", data={"csrf": token, "ai_docs_provider": "groq", "ai_chat_provider": "groq",
+                                        "ai_chat_model_select": "llama-3.3-70b-versatile", "ai_chat_model_manual": "nome-nuovo-non-elencato"})
+    assert service.ai.model("chat") == "nome-nuovo-non-elencato"
+    assert "«nome-nuovo-non-elencato» non compare" in response.text and "Prova" in response.text
+
+
+@pytest.mark.parametrize(
+    "data,fragment",
+    [
+        ({"custom_base_url": "ftp://esempio"}, "http:// o https://"),
+        ({"custom_base_url": "javascript:alert(1)"}, "http:// o https://"),
+        ({"ai_chat_provider": "sconosciuto"}, "Servizio non valido"),
+        ({"ai_chat_provider": "gemini", "ai_chat_model_manual": "nome con spazi"}, "caratteri non validi"),
+        ({"ai_chat_provider": "gemini", "ai_chat_model_manual": "x;rm -rf"}, "caratteri non validi"),
+    ],
+)
+def test_invalid_input_is_refused_without_saving(ia_client, data, fragment):
+    client, service = ia_client
+    token = login(client)
+    body = {"csrf": token, "ai_docs_provider": "gemini", "ai_chat_provider": "gemini", **data}
+    assert fragment in client.post("/ia", data=body).text
+    assert service.settings.get("custom_base_url") == "" and service.ai.provider("chat") == "gemini"
+
+
+def test_a_wrong_key_shows_the_reason_and_breaks_nothing(ia_client):
+    client, service = ia_client
+    token = login(client)
+    response = client.post("/ia", data={"csrf": token, "groq_api_key": "SBAGLIATA", "ai_docs_provider": "groq", "ai_chat_provider": "gemini"})
+    assert response.status_code == 200 and "La chiave di Groq non è valida" in response.text
+    assert service.ai.model("docs") == ""
+
+
+def test_keys_are_encrypted_kept_when_left_blank_and_never_rendered(ia_client):
+    client, service = ia_client
+    token = login(client)
+    client.post("/ia", data={"csrf": token, "groq_api_key": "gsk_segretissima", "custom_base_url": "http://192.168.0.50:11434/v1/", "custom_api_key": "ollama"})
+    # come il browser: il campo indirizzo è precompilato e la casella della chiave resta vuota
+    client.post("/ia", data={"csrf": token, "groq_api_key": "", "custom_base_url": service.settings.get("custom_base_url"), "ai_docs_provider": "gemini", "ai_chat_provider": "gemini"})
+    assert service.settings.get("groq_api_key") == "gsk_segretissima" and service.settings.get("custom_base_url") == "http://192.168.0.50:11434/v1"
+    stored = service.db.execute("SELECT value FROM settings WHERE key = 'groq_api_key'")[0]["value"]
+    assert "gsk_segretissima" not in stored
+    assert "gsk_segretissima" not in client.get("/ia").text
+
+
+def test_probe_buttons_report_the_outcome_per_role(ia_client):
+    client, service = ia_client
+    token = login(client)
+    client.post("/ia", data={"csrf": token, "groq_api_key": "gsk", "ai_docs_provider": "groq", "ai_chat_provider": "groq"})
+    docs = client.post("/ia/prova/docs", data={"csrf": token}).text
+    assert "Lettura dei documenti · Groq · meta-llama/llama-4-scout-17b-16e-instruct: funziona" in docs
+    assert "Domande e risposte · Groq · llama-3.3-70b-versatile: funziona" in client.post("/ia/prova/chat", data={"csrf": token}).text
+
+
+def test_probe_requires_login_csrf_and_a_valid_role(ia_client):
+    client, _ = ia_client
+    assert client.post("/ia/prova/chat", follow_redirects=False).status_code == 303
+    token = login(client)
+    assert client.post("/ia/prova/chat").status_code == 403
+    assert client.post("/ia/prova/altro", data={"csrf": token}).status_code == 404
+
+
+def test_status_page_shows_which_service_answers(ia_client):
+    client, service = ia_client
+    token = login(client)
+    html = client.get("/").text
+    assert "Intelligenza artificiale" in html and "Google Gemini" in html
+    client.post("/ia", data={"csrf": token, "groq_api_key": "gsk", "ai_docs_provider": "gemini", "ai_chat_provider": "groq"})
+    html = client.get("/").text
+    assert "Groq" in html and "llama-3.3-70b-versatile" in html

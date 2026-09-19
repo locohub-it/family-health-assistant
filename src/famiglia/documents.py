@@ -122,7 +122,14 @@ class DocumentService:
         filename = f"{doc_date or clock.now().strftime('%Y-%m-%d')}_{kind}{SUPPORTED_MIME[mime]}"
         saved_path = await self._save_file([patient.name, FOLDERS[kind]], filename, data)
         document_id = self._records.add_document(
-            patient.id, sender.telegram_id, kind, saved_path, doc_date, extraction.summary, extraction.model_dump_json()
+            patient.id,
+            sender.telegram_id,
+            kind,
+            saved_path,
+            doc_date,
+            extraction.summary,
+            extraction.model_dump_json(),
+            extraction.details.strip(),
         )
         text = await self._save_details(document_id, patient, extraction, doc_date)
         self._log("documento", f"{patient.name}: {kind}")

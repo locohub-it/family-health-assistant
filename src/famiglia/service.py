@@ -14,6 +14,8 @@ from .consult import Answerer, Consultant
 from .db import Database
 from .documents import DEFAULT_DOCUMENTS_DIR, DocumentService
 from .gemini import DocumentReader, Gemini
+from .openai_compat import OpenAICompat
+from .router import AiRouter
 from .records import Records
 from .settings import BOT_KEYS, Settings
 from .storage import Storage, StorageError
@@ -30,6 +32,7 @@ class Service:
         reader: DocumentReader | None = None,
         answerer: Answerer | None = None,
         composio_factory: Callable[[str], Any] | None = None,
+        ai_http: httpx.AsyncClient | None = None,
     ) -> None:
         self.db = Database(Path(data_dir) / "famiglia.db")
         self.settings = Settings(self.db, secret_key)
@@ -38,11 +41,13 @@ class Service:
         self.fallback_storage = Storage(Path(data_dir) / "documenti")  # nel volume dei dati: sempre disponibile
         self.records = Records(self.db)
         self.gemini = Gemini(self.settings, gemini_http, self.log)
+        self.openai = OpenAICompat(ai_http)
+        self.ai = AiRouter(self.settings, self.gemini, self.openai, self.log)
         self.calendar = Calendar(self.settings, composio_factory)
         self.documents = DocumentService(
-            self.settings, self.users, self.storage, self.records, reader or self.gemini, self.log, self.calendar, self.fallback_storage
+            self.settings, self.users, self.storage, self.records, reader or self.ai, self.log, self.calendar, self.fallback_storage
         )
-        self.consultant = Consultant(self.users, self.records, answerer or self.gemini, self.log)
+        self.consultant = Consultant(self.users, self.records, answerer or self.ai, self.log)
         self.bot = BotRunner(self.settings, self.users, self.documents, self.consultant, self.log, self.calendar)
         self.settings.on_change(self._settings_changed)
 

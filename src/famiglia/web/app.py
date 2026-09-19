@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from ..ai import PROVIDERS, ROLES
 from ..auth import set_password, verify_password
 from ..calendar import CalendarError
 from ..clock import TIMEZONE
@@ -24,6 +25,10 @@ from ..gemini import GeminiError
 from ..service import Service
 from ..storage import StorageError
 from ..users import coordinator_of
+
+
+MODEL_NAME = re.compile(r"^[\w./:@\-]{1,120}$")
+BASE_URL = re.compile(r"^https?://[^\s]+$")
 
 
 class LoginRequired(Exception):
@@ -158,6 +163,10 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             users=service.users.all(),
             default_dir=DEFAULT_DOCUMENTS_DIR,
             folder_problem=folder_problem(),
+            ai_summary=[
+                (label, PROVIDERS[service.ai.provider(role)]["label"], service.ai.model(role) or settings.get("gemini_model"))
+                for role, label in ROLES.items()
+            ],
         )
 
     # --- Chiavi API --------------------------------------------------------------
@@ -207,6 +216,55 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         for label, ok, detail in results:
             flash(request, "ok" if ok else "error", f"{label}: {'funziona' if ok else detail}")
         return back("/api")
+
+    # --- Modelli IA --------------------------------------------------------------
+
+    @app.get("/ia")
+    async def ai_page(request: Request) -> Response:
+        current = {}
+        for role in ROLES:
+            provider, model = service.ai.provider(role), service.ai.model(role)
+            current[role] = {"provider": provider, "model": model, "models": service.ai.cached_models(provider)}
+        return page(request, "ia.html", active="ia", roles=ROLES, providers=PROVIDERS, current=current)
+
+    @app.post("/ia")
+    async def ai_save(request: Request) -> Response:
+        """Salva chiavi e scelte, poi cerca da solo i modelli disponibili e sceglie dove manca."""
+        form = await checked_form(request)
+        values: dict[str, str] = {}
+        for key in ("groq_api_key", "deepseek_api_key", "custom_api_key"):
+            secret_field(form, key, values)
+        base_url = form.get("custom_base_url", "").strip().rstrip("/")
+        if base_url and not BASE_URL.match(base_url):
+            flash(request, "error", "L'indirizzo del servizio deve iniziare con http:// o https://")
+            return back("/ia")
+        values["custom_base_url"] = base_url
+        for role in ROLES:
+            provider = form.get(f"ai_{role}_provider", "gemini")
+            if provider not in PROVIDERS:
+                flash(request, "error", "Servizio non valido")
+                return back("/ia")
+            # Cambiando servizio, il modello scritto prima non vale più: si lascia scegliere in automatico.
+            model = ""
+            if provider == service.ai.provider(role):
+                model = form.get(f"ai_{role}_model_manual", "").strip() or form.get(f"ai_{role}_model_select", "").strip()
+            if model and not MODEL_NAME.match(model):
+                flash(request, "error", f"«{ROLES[role]}»: il nome del modello contiene caratteri non validi")
+                return back("/ia")
+            values[f"ai_{role}_provider"], values[f"ai_{role}_model"] = provider, model
+        settings.update(values)
+        for text, ok in await service.ai.refresh_and_pick():
+            flash(request, "ok" if ok else "error", text)
+        return back("/ia")
+
+    @app.post("/ia/prova/{role}")
+    async def ai_probe(request: Request, role: str) -> Response:
+        await checked_form(request)
+        if role not in ROLES:
+            raise HTTPException(status_code=404)
+        label, ok, detail = await service.ai.probe(role)
+        flash(request, "ok" if ok else "error", f"{label}: {detail}")
+        return back("/ia")
 
     # --- Utenti ------------------------------------------------------------------
 

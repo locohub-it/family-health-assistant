@@ -333,3 +333,42 @@ async def test_check_without_a_key_reports_it(tmp_path, root):
     svc = Service(tmp_path / "data", "chiave-di-test", root)
     with pytest.raises(GeminiError, match="manca la chiave"):
         await svc.gemini.check()
+
+
+# --- Modello per ruolo ed elenco modelli ---------------------------------------
+
+
+async def test_a_model_chosen_for_the_role_overrides_the_default(gemini):
+    client, seen = gemini(lambda r: ok())
+    await client.analyze_document(JPEG, "image/jpeg", model="gemini-scelto-dal-ruolo")
+    await client.answer("## Mario", "Mario", question="Ciao?", model="gemini-per-le-domande")
+    assert [model_of(r) for r in seen] == ["gemini-scelto-dal-ruolo", "gemini-per-le-domande"]
+
+
+async def test_list_models_returns_only_text_generators_without_the_prefix(gemini):
+    def respond(request):
+        assert request.url.path.endswith("/models")
+        return httpx.Response(200, json={"models": [
+            {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent", "countTokens"]},
+            {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+            {"name": "models/gemini-3.5-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+        ]})
+
+    client, _ = gemini(respond)
+    assert await client.list_models() == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+
+
+async def test_list_models_with_a_bad_key_says_so(gemini):
+    client, _ = gemini(lambda r: httpx.Response(403, json={"error": {"code": 403, "message": "no", "status": "PERMISSION_DENIED"}}))
+    with pytest.raises(GeminiError, match="403") as exc:
+        await client.list_models()
+    assert "chiave Gemini non è valida" in exc.value.user_message
+
+
+async def test_extraction_now_carries_details(gemini):
+    from helpers import altro
+
+    text = altro("ricetta", details="Occhio destro: sfera -2.50\nOcchio sinistro: sfera -3.00").model_dump_json()
+    client, _ = gemini(lambda r: httpx.Response(200, json=candidate(text)))
+    result = await client.analyze_document(JPEG, "image/jpeg")
+    assert "sfera -2.50" in result.details

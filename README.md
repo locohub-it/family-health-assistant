@@ -45,6 +45,11 @@ contenuti inviati per migliorare i suoi prodotti: per dati sanitari conviene un 
 Cloud con **fatturazione attiva**, dove i dati non vengono usati per l'addestramento. I documenti
 restano sul tuo server, nella cartella che scegli; il database sta nel volume del container.
 
+Lo stesso vale per **qualunque provider AI** scelto in «Modelli IA»: le foto e le domande vengono
+inviate a quel servizio (Groq, DeepSeek, OpenRouter…), con le sue regole sulla conservazione dei dati e
+la sua sede. Controlla le condizioni prima di usare dati sanitari veri; un servizio sul tuo server
+(per esempio Ollama) tiene tutto in casa.
+
 ## Cosa serve
 
 1. **Bot Telegram**: crealo con @BotFather (`/newbot`) e copia il token.
@@ -90,6 +95,13 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
    principale ha finito le richieste o non risponde, e il bot aspetta e riprova se il limite è al minuto (e non aspetta invano se la quota è finita).
    La ricerca web di Google nelle risposte ha una quota sua: se è finita, il bot risponde con i dati
    salvati e lo dice; si può anche disattivare.
+   **Modelli IA** (facoltativo): Gemini è il predefinito, ma per ogni funzione (lettura dei documenti,
+   domande) si può scegliere un altro servizio: **Groq**, **DeepSeek** o uno qualsiasi compatibile
+   OpenAI (OpenRouter, Ollama sul tuo server…). Inserisci la chiave e premi «Salva e cerca i modelli»:
+   il pannello chiede al servizio i modelli disponibili e sceglie da solo quello adatto (si può
+   cambiare dal menu o scrivere il nome a mano). «Prova» verifica che il modello risponda e, per i
+   documenti, che accetti le immagini. Con Groq i vocali si trascrivono con Whisper; la ricerca web di
+   Google nelle risposte esiste solo con Gemini. I PDF con testo si leggono con qualsiasi modello.
 2. **Cartella** (facoltativo): senza scegliere niente il bot salva in `Documenti`, dentro
    `STORAGE_ROOT`, e la crea da solo. Per cambiarla, sfoglia dentro `STORAGE_ROOT`, crea una
    cartella se serve e scegli «Usa questa cartella» (il pannello controlla che si possa

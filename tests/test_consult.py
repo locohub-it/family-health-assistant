@@ -161,3 +161,33 @@ async def test_gemini_answer_sends_voice_as_audio(gemini):
     assert "messaggio vocale" in parts[0]["text"]
     assert parts[1]["inlineData"]["mimeType"] == "audio/ogg"
     assert base64.urlsafe_b64decode(parts[1]["inlineData"]["data"]) == b"OggS-voce"
+
+
+# --- Dettagli dei documenti ----------------------------------------------------
+
+
+async def test_prescription_details_reach_the_context_so_answers_can_use_them(make):
+    svc = make()
+    await upload(svc, svc.mario, altro("ricetta", details="Occhio destro: sfera -2.50, cilindro -0.75\nOcchio sinistro: sfera -3.00", date="2026-03-10"))
+    context = svc.consultant.build_context([svc.mario])
+    assert "10/03/2026 (ricetta)" in context and "Dettagli:" in context
+    assert "    Occhio destro: sfera -2.50, cilindro -0.75" in context and "    Occhio sinistro: sfera -3.00" in context
+
+
+async def test_report_notes_are_in_the_context_too(make):
+    svc = make()
+    await upload(svc, svc.mario, referto(details="Conclusioni: nella norma, controllo tra 12 mesi."))
+    assert "Note del referto:" in svc.consultant.build_context([svc.mario])
+    assert "controllo tra 12 mesi" in svc.consultant.build_context([svc.mario])
+
+
+async def test_documents_without_details_add_no_empty_section(make):
+    svc = make()
+    await upload(svc, svc.mario, altro("ricetta"))
+    assert "Dettagli:" not in svc.consultant.build_context([svc.mario])
+
+
+async def test_details_are_saved_in_the_database(make):
+    svc = make()
+    outcome = await upload(svc, svc.mario, altro("ricetta", details="  Metformina 500 mg, due volte al giorno  "))
+    assert svc.records.get_document(outcome.document_id)["details"] == "Metformina 500 mg, due volte al giorno"

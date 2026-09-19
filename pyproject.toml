@@ -20,6 +20,7 @@ dependencies = [
     "google-genai>=2",
     "composio>=0.21",
     "qrcode>=7.4",
+    "pypdf>=4",
 ]
 
 [project.optional-dependencies]

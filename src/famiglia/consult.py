@@ -44,6 +44,11 @@ def split_message(text: str, limit: int = TELEGRAM_LIMIT) -> list[str]:
     return parts + [text] if text else parts
 
 
+def _indented(title: str, text: str) -> str:
+    """Dettagli su più righe, rientrati sotto la voce a cui appartengono."""
+    return f"  {title}:\n" + "\n".join(f"    {line.strip()}" for line in text.splitlines() if line.strip())
+
+
 class Consultant:
     def __init__(self, users: UserStore, records: Records, answerer: Answerer, log: Callable[[str, str], None]) -> None:
         self._users = users
@@ -76,6 +81,8 @@ class Consultant:
                     text += f" [{r['flag'].upper()}]"
                 values.append(text)
             lines.append(f"- {when}: " + ("; ".join(values) if values else doc["summary"] or "nessun valore"))
+            if doc["details"]:
+                lines.append(_indented("Note del referto", doc["details"]))
 
         appointments = self._records.appointments(patient.id, MAX_APPOINTMENTS)
         lines.append("Visite ed esami prenotati:" if appointments else "Nessuna visita salvata.")
@@ -90,6 +97,8 @@ class Consultant:
             for doc in others:
                 when = format_date(doc["doc_date"]) if doc["doc_date"] else "data non indicata"
                 lines.append(f"- {when} ({doc['kind']}): {doc['summary']}")
+                if doc["details"]:
+                    lines.append(_indented("Dettagli", doc["details"]))
         return "\n".join(lines)
 
     async def ask(self, sender: User, question: str | None = None, audio: bytes | None = None, audio_mime: str = "") -> str:
