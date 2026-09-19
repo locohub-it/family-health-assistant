@@ -20,6 +20,7 @@ from telegram.ext import (
     filters,
 )
 
+from .calendar import Calendar, CalendarError
 from .documents import MAX_BYTES, SUPPORTED_MIME, DocumentService
 from .gemini import GeminiError
 from .settings import Settings
@@ -47,11 +48,13 @@ class BotRunner:
         users: UserStore,
         documents: DocumentService,
         record: Callable[[str, str], None],
+        calendar: Calendar | None = None,
     ) -> None:
         self._settings = settings
         self._users = users
         self._documents = documents
         self._record = record
+        self._calendar = calendar
         self._changed = asyncio.Event()
         self.status = "non avviato"
 
@@ -106,6 +109,7 @@ class BotRunner:
         # Il cancello sta nel gruppo -1: se non passa, nessun altro handler vede l'aggiornamento.
         app.add_handler(TypeHandler(Update, self._gate), group=-1)
         app.add_handler(CommandHandler("start", self._start))
+        app.add_handler(CommandHandler("calendario", self._connect_calendar))
         app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._text))
         app.add_handler(CallbackQueryHandler(self._undo, pattern=f"^{UNDO_PREFIX}"))
@@ -131,6 +135,23 @@ class BotRunner:
                 f"Ciao {user.name}! Mandami la foto di un referto, di una ricetta o di una prenotazione "
                 "e ci penso io: non devi scrivere niente."
             )
+
+    async def _connect_calendar(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user, message = self._approved(update), update.effective_message
+        if user is None or message is None:
+            return
+        if self._calendar is None or not self._calendar.enabled:
+            await message.reply_text("Il calendario non è ancora configurato: chiedi a chi gestisce il bot.")
+            return
+        try:
+            link = await self._calendar.connect_link(user)
+        except CalendarError as exc:
+            self._note("errore", f"Collegamento calendario di {user.name}: {exc}")
+            await message.reply_text(exc.user_message)
+            return
+        await message.reply_text(
+            "Per collegare il tuo Google Calendar apri questo link e accedi con il tuo account Google:\n" + link
+        )
 
     async def _text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(

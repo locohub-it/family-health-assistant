@@ -251,3 +251,50 @@ async def test_network_down_at_startup_is_retried_and_token_is_scrubbed(svc, mon
     assert all("segreto" not in row["detail"] for row in svc.recent_activity(10))
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
+
+
+# --- /calendario ---------------------------------------------------------------
+
+
+def command_update(user_id, message):
+    return SimpleNamespace(effective_user=SimpleNamespace(id=user_id), effective_message=message)
+
+
+class Replies:
+    def __init__(self):
+        self.texts = []
+
+    async def reply_text(self, text, **kwargs):
+        self.texts.append(text)
+
+
+async def test_calendar_command_sends_the_connect_link(tmp_path, root):
+    from helpers import FakeComposio
+
+    composio = FakeComposio()
+    svc = Service(tmp_path / "data", "chiave-di-test", root, composio_factory=lambda key: composio)
+    svc.settings.update({"composio_api_key": "ak_test"})
+    svc.users.add(111, "Mario")
+    message = Replies()
+    await svc.bot._connect_calendar(command_update(111, message), None)
+    assert "https://connect.composio.dev/link/ln_abc" in message.texts[0]
+    assert composio.authorized == ["famiglia-111:googlecalendar"]
+
+
+async def test_calendar_command_without_composio_key_says_so(svc):
+    message = Replies()
+    await svc.bot._connect_calendar(command_update(111, message), None)
+    assert "non è ancora configurato" in message.texts[0]
+
+
+async def test_calendar_command_reports_composio_errors(tmp_path, root):
+    from helpers import FakeComposio
+
+    composio = FakeComposio()
+    composio.toolkits.authorize = lambda **kw: (_ for _ in ()).throw(ConnectionError("giù"))
+    svc = Service(tmp_path / "data", "chiave-di-test", root, composio_factory=lambda key: composio)
+    svc.settings.update({"composio_api_key": "ak_test"})
+    svc.users.add(111, "Mario")
+    message = Replies()
+    await svc.bot._connect_calendar(command_update(111, message), None)
+    assert "Non riesco a usare Google Calendar" in message.texts[0]

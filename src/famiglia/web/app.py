@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import re
 import secrets
 from datetime import datetime
 from pathlib import Path
 
+import qrcode
+import qrcode.image.svg
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from ..auth import set_password, verify_password
+from ..calendar import CalendarError
 from ..clock import TIMEZONE
 from ..service import Service
 from ..storage import StorageError
@@ -20,6 +25,14 @@ from ..storage import StorageError
 
 class LoginRequired(Exception):
     pass
+
+
+def qr_svg(url: str) -> str:
+    """QR come SVG inline, senza dimensioni fisse così lo dimensiona il CSS."""
+    buffer = io.BytesIO()
+    qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, border=2).save(buffer)
+    svg = buffer.getvalue().decode().split("?>", 1)[-1].strip()
+    return re.sub(r'width="[^"]*" height="[^"]*"', "", svg, count=1)
 
 
 def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure: bool = False) -> FastAPI:
@@ -159,9 +172,31 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
 
     # --- Utenti ------------------------------------------------------------------
 
+    def find_user(user_id: int):
+        user = service.users.get(user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="Utente non trovato")
+        return user
+
     @app.get("/utenti")
     async def users_page(request: Request) -> Response:
-        return page(request, "utenti.html", active="utenti", users=service.users.all())
+        require_login(request)
+        users = service.users.all()
+        connected, calendar_note = None, ""
+        if service.calendar.enabled:
+            try:
+                connected = await service.calendar.connected_user_ids(users)
+            except CalendarError as exc:  # Composio irraggiungibile: la pagina deve comunque aprirsi
+                calendar_note = exc.user_message
+        return page(
+            request,
+            "utenti.html",
+            active="utenti",
+            users=users,
+            connected=connected,
+            calendar_enabled=service.calendar.enabled,
+            calendar_note=calendar_note,
+        )
 
     @app.post("/utenti")
     async def users_add(request: Request) -> Response:
@@ -183,6 +218,45 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         await checked_form(request)
         service.users.remove(user_id)
         flash(request, "ok", "Utente rimosso, con i suoi referti e appuntamenti salvati")
+        return back("/utenti")
+
+    @app.post("/utenti/{user_id}/collega")
+    async def calendar_connect(request: Request, user_id: int) -> Response:
+        await checked_form(request)
+        user = find_user(user_id)
+        try:
+            link = await service.calendar.connect_link(user)
+        except CalendarError as exc:
+            flash(request, "error", exc.user_message)
+            return back("/utenti")
+        return page(request, "collega.html", active="utenti", target=user, link=link, qr=qr_svg(link))
+
+    @app.get("/utenti/{user_id}/calendario")
+    async def calendar_page(request: Request, user_id: int) -> Response:
+        require_login(request)
+        user = find_user(user_id)
+        try:
+            calendars = await service.calendar.list_calendars(user)
+        except CalendarError as exc:
+            flash(request, "error", exc.user_message)
+            return back("/utenti")
+        return page(request, "calendario.html", active="utenti", target=user, calendars=calendars)
+
+    @app.post("/utenti/{user_id}/calendario")
+    async def calendar_save(request: Request, user_id: int) -> Response:
+        form = await checked_form(request)
+        user = find_user(user_id)
+        chosen = form.get("calendar_id", "").strip()
+        try:
+            valid = {c.id for c in await service.calendar.list_calendars(user)}
+        except CalendarError as exc:
+            flash(request, "error", exc.user_message)
+            return back("/utenti")
+        if chosen not in valid:
+            flash(request, "error", "Calendario non valido")
+            return back(f"/utenti/{user_id}/calendario")
+        service.users.set_calendar(user.id, chosen)
+        flash(request, "ok", f"Le visite di {user.name} andranno sul calendario scelto")
         return back("/utenti")
 
     # --- Cartella dei documenti --------------------------------------------------

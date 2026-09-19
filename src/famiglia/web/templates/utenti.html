@@ -5,17 +5,29 @@
 <p class="hint">Il bot risponde solo a queste persone; chiunque altro viene ignorato in silenzio.
   Per conoscere il proprio ID Telegram basta scrivere a <b>@userinfobot</b>.</p>
 
+{% if calendar_note %}<div class="flash error">Google Calendar: {{ calendar_note }}</div>{% endif %}
 <div class="card">
   <h2>Utenti approvati</h2>
   {% if users %}
   <div class="table-wrap"><table>
-    <tr><th>Nome</th><th>Ruolo</th><th>ID Telegram</th><th>Calendario</th><th></th></tr>
+    <tr><th>Nome</th><th>Ruolo</th><th>ID Telegram</th><th>Google Calendar</th><th></th></tr>
     {% for u in users %}
     <tr>
       <td>{{ u.name }}</td>
       <td>{{ u.role }}</td>
       <td><code>{{ u.telegram_id }}</code></td>
-      <td><span class="hint">{{ u.calendar_id }}</span></td>
+      <td>
+        {% if not calendar_enabled %}<span class="hint">serve la chiave Composio</span>
+        {% elif connected is none %}<span class="hint">non verificabile</span>
+        {% elif u.composio_user_id in connected %}
+          <span class="badge ok">collegato</span>
+          <a href="/utenti/{{ u.id }}/calendario">{{ 'principale' if u.calendar_id == 'primary' else 'scelto' }}</a>
+        {% else %}
+          <span class="badge">non collegato</span>
+          <form method="post" action="/utenti/{{ u.id }}/collega" class="inline">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button>Collega</button></form>
+        {% endif %}
+      </td>
       <td><form method="post" action="/utenti/{{ u.id }}/elimina" class="inline">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button class="danger" onclick="return confirm('Rimuovere {{ u.name }}? Verranno cancellati anche i suoi referti e appuntamenti salvati.')">Rimuovi</button></form></td>

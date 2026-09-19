@@ -112,3 +112,79 @@ def test_missing_root_is_reported(tmp_path):
     client = TestClient(create_app(service, secret_key="chiave-di-test", admin_user="admin"))
     login(client)
     assert "non è montata" in client.get("/cartella").text
+
+
+# --- Google Calendar -----------------------------------------------------------
+
+
+@pytest.fixture
+def cal_client(tmp_path, root):
+    """Pannello con Composio finto: Mario ha il calendario collegato, Anna no."""
+    from famiglia.service import Service
+    from helpers import FakeComposio
+
+    composio = FakeComposio(connected={"famiglia-111"})
+    service = Service(tmp_path / "data", "chiave-di-test", root, composio_factory=lambda key: composio)
+    service.settings.update({"composio_api_key": "ak_test"})
+    service.mario = service.users.add(111, "Mario")
+    service.anna = service.users.add(222, "Anna")
+    set_password(service.settings, PASSWORD)
+    client = TestClient(create_app(service, secret_key="chiave-di-test", admin_user="admin"))
+    return client, service, composio
+
+
+def test_users_page_shows_who_is_connected(cal_client):
+    client, service, _ = cal_client
+    login(client)
+    html = client.get("/utenti").text
+    assert html.count("collegato</span>") == 2  # «collegato» e «non collegato»
+    assert f"/utenti/{service.mario.id}/calendario" in html and f"/utenti/{service.anna.id}/collega" in html
+    assert f"/utenti/{service.mario.id}/collega" not in html
+
+
+def test_users_page_without_composio_key_explains_it(client, service):
+    login(client)
+    service.users.add(111, "Mario")
+    assert "serve la chiave Composio" in client.get("/utenti").text
+
+
+def test_users_page_survives_composio_being_down(cal_client):
+    client, service, composio = cal_client
+    composio.connected_accounts.list = lambda **kw: (_ for _ in ()).throw(ConnectionError("giù"))
+    login(client)
+    response = client.get("/utenti")
+    assert response.status_code == 200 and "Non riesco a usare Google Calendar" in response.text and "Anna" in response.text
+
+
+def test_connect_page_shows_link_and_qr(cal_client):
+    client, service, composio = cal_client
+    token = login(client)
+    response = client.post(f"/utenti/{service.anna.id}/collega", data={"csrf": token})
+    assert response.status_code == 200
+    assert "https://connect.composio.dev/link/ln_abc" in response.text and "<svg" in response.text
+    assert composio.authorized == ["famiglia-222:googlecalendar"]
+
+
+def test_connect_requires_csrf_and_login(cal_client):
+    client, service, _ = cal_client
+    assert client.post(f"/utenti/{service.anna.id}/collega", follow_redirects=False).status_code == 303
+    login(client)
+    assert client.post(f"/utenti/{service.anna.id}/collega").status_code == 403
+    assert client.post("/utenti/999/collega", data={"csrf": csrf(client, "/")}).status_code == 404
+
+
+def test_choose_calendar(cal_client):
+    client, service, _ = cal_client
+    token = login(client)
+    page = client.get(f"/utenti/{service.mario.id}/calendario").text
+    assert "Famiglia" in page and "principale" in page
+    client.post(f"/utenti/{service.mario.id}/calendario", data={"csrf": token, "calendar_id": "famiglia@group.calendar.google.com"})
+    assert service.users.get(service.mario.id).calendar_id == "famiglia@group.calendar.google.com"
+
+
+def test_cannot_choose_a_calendar_that_is_not_in_the_list(cal_client):
+    client, service, _ = cal_client
+    token = login(client)
+    response = client.post(f"/utenti/{service.mario.id}/calendario", data={"csrf": token, "calendar_id": "altrui@example.com"})
+    assert "Calendario non valido" in response.text
+    assert service.users.get(service.mario.id).calendar_id == "primary"

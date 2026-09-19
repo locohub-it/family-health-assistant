@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Calendario{% endblock %}
+{% block content %}
+<h1>Calendario di {{ target.name }}</h1>
+<form method="post" action="/utenti/{{ target.id }}/calendario" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <p class="hint">Scegli su quale calendario Google vanno le visite. Sono elencati solo quelli su cui si può scrivere.</p>
+  {% for c in calendars %}
+  <label class="check"><input type="radio" name="calendar_id" value="{{ c.id }}" {{ 'checked' if c.id == target.calendar_id or (target.calendar_id == 'primary' and c.primary) }} required>
+    {{ c.name }}{% if c.primary %} <span class="badge">principale</span>{% endif %}</label>
+  {% else %}
+  <p>Nessun calendario disponibile.</p>
+  {% endfor %}
+  <div class="actions"><button class="primary">Salva</button> <a href="/utenti"><button type="button">Annulla</button></a></div>
+</form>
+{% endblock %}

@@ -18,6 +18,8 @@ dependencies = [
     "tzdata",
     "python-telegram-bot>=22",
     "google-genai>=2",
+    "composio>=0.21",
+    "qrcode>=7.4",
 ]
 
 [project.optional-dependencies]

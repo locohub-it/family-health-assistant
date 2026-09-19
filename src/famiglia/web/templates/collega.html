@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Collega calendario{% endblock %}
+{% block content %}
+<h1>Collega il Google Calendar di {{ target.name }}</h1>
+<div class="card">
+  <p>Apri questo indirizzo <b>con il telefono o il computer di {{ target.name }}</b> e accedi con il suo account Google.
+     Al termine le visite finiranno sul suo calendario.</p>
+  <p><a href="{{ link }}" target="_blank" rel="noopener"><code>{{ link }}</code></a></p>
+  <p class="hint">Oppure inquadra questo codice con il telefono:</p>
+  <div class="qr">{{ qr | safe }}</div>
+  <p class="hint">{{ target.name }} può anche scrivere <b>/calendario</b> al bot su Telegram per ricevere lo stesso link.</p>
+  <div class="actions"><a href="/utenti"><button class="primary" type="button">Ho finito</button></a></div>
+</div>
+{% endblock %}

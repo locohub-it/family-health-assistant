@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 import httpx
 
 from .bot import BotRunner
+from .calendar import Calendar
 from .db import Database
 from .documents import DocumentService
 from .gemini import DocumentReader, Gemini
@@ -25,6 +27,7 @@ class Service:
         storage_root: str | Path,
         gemini_http: httpx.AsyncClient | None = None,
         reader: DocumentReader | None = None,
+        composio_factory: Callable[[str], Any] | None = None,
     ) -> None:
         self.db = Database(Path(data_dir) / "famiglia.db")
         self.settings = Settings(self.db, secret_key)
@@ -32,10 +35,11 @@ class Service:
         self.storage = Storage(storage_root)
         self.records = Records(self.db)
         self.gemini = Gemini(self.settings, gemini_http)
+        self.calendar = Calendar(self.settings, composio_factory)
         self.documents = DocumentService(
-            self.settings, self.users, self.storage, self.records, reader or self.gemini, self.log
+            self.settings, self.users, self.storage, self.records, reader or self.gemini, self.log, self.calendar
         )
-        self.bot = BotRunner(self.settings, self.users, self.documents, self.log)
+        self.bot = BotRunner(self.settings, self.users, self.documents, self.log, self.calendar)
         self.settings.on_change(self._settings_changed)
 
     def _settings_changed(self, keys: set[str]) -> None:

@@ -15,9 +15,10 @@ in cui salvare i documenti.
 
 > **Stato: in sviluppo.**
 > Pronto: pannello di configurazione, bot Telegram che legge foto e PDF con Gemini, salva referti,
-> appuntamenti, ricette e altri documenti (con «Annulla»). Testato con Gemini e Telegram simulati:
-> la prima prova con le chiavi vere è da fare.
-> In arrivo: Google Calendar tramite Composio e la modalità consultazione (domande e vocali).
+> appuntamenti, ricette e altri documenti (con «Annulla»), visite sul Google Calendar di ciascuno
+> tramite Composio. Testato con Gemini, Telegram e Composio simulati: la prima prova con le chiavi
+> vere è da fare.
+> In arrivo: la modalità consultazione (domande e vocali).
 
 ## Come funziona
 
@@ -82,7 +83,9 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
 1. **Chiavi API**: token del bot, chiave Gemini, chiave Composio.
 2. **Cartella**: sfoglia dentro `STORAGE_ROOT`, crea una cartella se serve e scegli
    «Usa questa cartella». Il pannello controlla che si possa scrivere davvero.
-3. **Utenti**: aggiungi nome e ID Telegram di ogni familiare.
+3. **Utenti**: aggiungi nome e ID Telegram di ogni familiare. Poi, per ognuno, **Collega**: si apre
+   una pagina con il link (e il QR) su cui la persona accede al proprio Google. Lo stesso link lo
+   riceve scrivendo `/calendario` al bot. Se ha più calendari, si sceglie quello delle visite.
 
 Password del pannello dimenticata:
 `docker compose run --rm famiglia python -m famiglia.set_password`

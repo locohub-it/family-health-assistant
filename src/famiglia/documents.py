@@ -13,6 +13,7 @@ from datetime import date, datetime
 from typing import Callable
 
 from . import clock
+from .calendar import UNKNOWN_TIME, Calendar, CalendarError
 from .gemini import DocumentReader, Extraction
 from .records import Records
 from .settings import Settings
@@ -87,6 +88,7 @@ class DocumentService:
         records: Records,
         gemini: DocumentReader,
         log: Callable[[str, str], None],
+        calendar: Calendar | None = None,
     ) -> None:
         self._settings = settings
         self._users = users
@@ -94,6 +96,7 @@ class DocumentService:
         self._records = records
         self._gemini = gemini
         self._log = log
+        self._calendar = calendar
 
     async def process(self, sender: User, data: bytes, mime: str) -> Outcome:
         if mime not in SUPPORTED_MIME:
@@ -123,7 +126,7 @@ class DocumentService:
         document_id = self._records.add_document(
             patient.id, sender.telegram_id, kind, saved_path, doc_date, extraction.summary, extraction.model_dump_json()
         )
-        text = self._save_details(document_id, patient, extraction, doc_date)
+        text = await self._save_details(document_id, patient, extraction, doc_date)
         self._log("documento", f"{patient.name}: {kind}")
         return Outcome(note + text, document_id)
 
@@ -141,12 +144,12 @@ class DocumentService:
             return sender, f"Il documento è intestato a «{patient_name.strip()}», che non è tra i familiari: l'ho messo a nome tuo.\n\n"
         return sender, ""
 
-    def _save_details(self, document_id: int, patient: User, extraction: Extraction, doc_date: str) -> str:
+    async def _save_details(self, document_id: int, patient: User, extraction: Extraction, doc_date: str) -> str:
         who = patient.name
         if extraction.kind == "referto":
             return self._save_lab_report(document_id, patient, extraction, doc_date)
         if extraction.kind == "appuntamento":
-            return self._save_appointment(document_id, patient, extraction)
+            return await self._save_appointment(document_id, patient, extraction)
         label = "la ricetta" if extraction.kind == "ricetta" else "il documento"
         return f"Ho salvato {label} di {who}.\n{extraction.summary}"
 
@@ -165,7 +168,7 @@ class DocumentService:
             lines += [f"• {r.name}: {r.value} {r.unit} ({r.flag})".replace("  ", " ") for r in flagged]
         return "\n".join(lines)
 
-    def _save_appointment(self, document_id: int, patient: User, extraction: Extraction) -> str:
+    async def _save_appointment(self, document_id: int, patient: User, extraction: Extraction) -> str:
         info = extraction.appointment
         day = _valid_date(info.date) if info else ""
         if not info or not day:
@@ -176,14 +179,31 @@ class DocumentService:
         hour = _valid_time(info.time)
         starts_at = f"{day}T{hour}" if hour else day
         title = info.title.strip() or "Visita medica"
-        self._records.add_appointment(document_id, patient.id, starts_at, title, info.place.strip(), info.notes.strip())
+        place, notes = info.place.strip(), info.notes.strip()
+        appointment_id = self._records.add_appointment(document_id, patient.id, starts_at, title, place, notes)
         when = f"il {format_date(day)}" + (f" alle {hour}" if hour else "")
         lines = [f"Ho salvato la visita «{title}» di {patient.name} per {when}."]
         if info.place.strip():
             lines.append(f"Dove: {info.place.strip()}")
         if info.notes.strip():
             lines.append(f"Da ricordare: {info.notes.strip()}")
-        return "\n".join(lines)
+        lines.append(await self._add_to_calendar(patient, appointment_id, starts_at, title, place, notes))
+        return "\n".join(line for line in lines if line)
+
+    async def _add_to_calendar(
+        self, patient: User, appointment_id: int, starts_at: str, title: str, place: str, notes: str
+    ) -> str:
+        """Il calendario è un di più: se non va, la visita resta salvata e l'utente lo sa."""
+        if self._calendar is None or not self._calendar.enabled:
+            return ""
+        try:
+            event_id = await self._calendar.create_event(patient, starts_at, title, place, notes)
+        except CalendarError as exc:
+            self._log("errore", f"Calendario di {patient.name}: {exc}")
+            return f"⚠️ {exc.user_message}"
+        self._records.set_event_id(appointment_id, event_id)
+        line = f"📅 L'ho aggiunta al calendario di {patient.name}."
+        return line if "T" in starts_at else f"{line} L'ora non c'era: ho messo le {UNKNOWN_TIME}, da confermare."
 
     async def undo(self, sender: User, document_id: int) -> str:
         document = self._records.get_document(document_id)
@@ -191,10 +211,24 @@ class DocumentService:
             return "Era già stato annullato."
         if document["sender_telegram_id"] != sender.telegram_id:
             return "Puoi annullare solo quello che hai inviato tu."
+        warning = await self._remove_calendar_events(document)
         self._records.delete_document(document_id)
         try:
             await asyncio.to_thread(self._storage.delete, document["file_path"])
         except StorageError:
             pass  # il file non si cancella ma i dati sì: meglio dell'opposto
         self._log("annullato", f"documento {document_id}")
-        return "Annullato: ho tolto il documento."
+        return "Annullato: ho tolto il documento." + warning
+
+    async def _remove_calendar_events(self, document) -> str:
+        events = [a["event_id"] for a in self._records.appointments_of_document(document["id"]) if a["event_id"]]
+        patient = self._users.get(document["user_id"])
+        if not events or patient is None or self._calendar is None:
+            return ""
+        try:
+            for event_id in events:
+                await self._calendar.delete_event(patient, event_id)
+        except CalendarError as exc:
+            self._log("errore", f"Calendario di {patient.name}: {exc}")
+            return "\n⚠️ Non sono riuscito a togliere la visita dal calendario: va cancellata a mano."
+        return "\nHo tolto anche la visita dal calendario."

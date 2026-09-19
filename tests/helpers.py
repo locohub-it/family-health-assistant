@@ -37,3 +37,47 @@ class FakeReader:
         if self.error:
             raise self.error
         return self.extraction
+
+
+class FakeComposio:
+    """Al posto di Composio: registra le chiamate e risponde come da documentazione."""
+
+    def __init__(self, connected=(), calendars=None, execute_error=None, link="https://connect.composio.dev/link/ln_abc"):
+        self.connected = set(connected)
+        self.calendars = calendars if calendars is not None else [
+            {"id": "mario@example.com", "summary": "Mario", "primary": True},
+            {"id": "famiglia@group.calendar.google.com", "summary": "Famiglia", "primary": False},
+        ]
+        self.execute_error, self.link = execute_error, link
+        self.executed: list[tuple[str, dict, str]] = []
+        self.authorized: list[str] = []
+        self.list_calls: list[dict] = []
+        from types import SimpleNamespace
+
+        self.tools = SimpleNamespace(execute=self._execute)
+        self.toolkits = SimpleNamespace(authorize=self._authorize)
+        self.connected_accounts = SimpleNamespace(list=self._list)
+
+    def _execute(self, slug, arguments, *, user_id=None, dangerously_skip_version_check=None, **kwargs):
+        self.executed.append((slug, arguments, user_id))
+        assert dangerously_skip_version_check, "senza versione l'SDK vero solleva ToolVersionRequiredError"
+        if self.execute_error:
+            return {"successful": False, "data": {}, "error": self.execute_error}
+        if slug == "GOOGLECALENDAR_LIST_CALENDARS":
+            return {"successful": True, "data": {"items": self.calendars}, "error": None}
+        if slug == "GOOGLECALENDAR_CREATE_EVENT":
+            return {"successful": True, "data": {"response_data": {"id": "evt123", "summary": arguments["summary"]}}, "error": None}
+        return {"successful": True, "data": {}, "error": None}
+
+    def _authorize(self, *, user_id, toolkit):
+        from types import SimpleNamespace
+
+        self.authorized.append(f"{user_id}:{toolkit}")
+        return SimpleNamespace(redirect_url=self.link, id="ca_1")
+
+    def _list(self, **kwargs):
+        from types import SimpleNamespace
+
+        self.list_calls.append(kwargs)
+        wanted = set(kwargs["user_ids"])
+        return SimpleNamespace(items=[SimpleNamespace(user_id=u) for u in self.connected if u in wanted])
