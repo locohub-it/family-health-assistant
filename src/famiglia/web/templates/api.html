@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Chiavi API{% endblock %}
+{% block content %}
+<h1>Chiavi API</h1>
+<form method="post" action="/api">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+
+  <div class="card">
+    <h2>Telegram</h2>
+    <label for="bot_token">Token del bot {% if s.is_set('bot_token') %}<span class="badge ok">impostato</span>{% endif %}</label>
+    <input id="bot_token" name="bot_token" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarlo' if s.is_set('bot_token') else '123456:ABC…' }}">
+    <div class="hint">Si crea con @BotFather su Telegram (/newbot).</div>
+  </div>
+
+  <div class="card">
+    <h2>Gemini</h2>
+    <label for="gemini_api_key">Chiave API {% if s.is_set('gemini_api_key') %}<span class="badge ok">impostata</span>{% endif %}</label>
+    <input id="gemini_api_key" name="gemini_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('gemini_api_key') else 'AIza…' }}">
+    <div class="hint">Da <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.
+      Sul piano gratuito Google può usare i contenuti inviati per migliorare i suoi prodotti: per dati sanitari
+      conviene un progetto con fatturazione attiva.</div>
+    <label for="gemini_model">Modello</label>
+    <input id="gemini_model" name="gemini_model" type="text" value="{{ s.get('gemini_model') }}" required>
+  </div>
+
+  <div class="card">
+    <h2>Composio (Google Calendar)</h2>
+    <label for="composio_api_key">Chiave API {% if s.is_set('composio_api_key') %}<span class="badge ok">impostata</span>{% endif %}</label>
+    <input id="composio_api_key" name="composio_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('composio_api_key') else 'ak_…' }}">
+    <div class="hint">Da <a href="https://platform.composio.dev" target="_blank" rel="noopener">platform.composio.dev</a>.
+      Serve solo per aggiungere le visite ai calendari; senza, il bot salva comunque referti e appuntamenti.</div>
+  </div>
+
+  <div class="actions"><button class="primary">Salva</button></div>
+</form>
+{% endblock %}

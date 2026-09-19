@@ -1,0 +1,21 @@
+# Stack per Portainer: usa l'immagine pubblicata su GHCR dalla GitHub Action.
+# Le variabili vanno impostate nella sezione "Environment variables" dello stack.
+services:
+  famiglia:
+    image: ghcr.io/locohub-it/family-health-assistant:latest
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?imposta SECRET_KEY nello stack}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+    volumes:
+      - famiglia-data:/app/data
+      # Cartella dell'host (o del NAS) in cui il pannello lascia scegliere dove salvare i documenti.
+      - ${STORAGE_ROOT:?imposta STORAGE_ROOT nello stack}:/storage
+    ports:
+      # Pannello raggiungibile solo dalla rete locale, es. http://192.168.0.30:8096
+      - "${WEB_PORT:-8096}:8080"
+
+volumes:
+  famiglia-data:

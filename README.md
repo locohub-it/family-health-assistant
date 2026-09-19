@@ -1,0 +1,96 @@
+# Family Health Assistant
+
+Assistente medico familiare su Telegram, pensato per genitori e nonni: si manda una **foto**
+di un referto, di una ricetta o di una prenotazione e il bot capisce da solo cosa fare, senza
+che l'utente scriva nulla.
+
+- **Prenotazione di una visita** → la salva nel database e la aggiunge al **Google Calendar**
+  della persona giusta.
+- **Referto di analisi** (es. «esami del 25/10/2025») → salva i valori nel database.
+- **Domanda in chat** («in base all'ultimo referto, cosa comportano quei valori?») → il bot passa
+  alla consultazione: legge lo storico della persona e chiede a **Gemini** di valutarlo.
+
+Tutto si configura da una **pagina web**: chiavi API, utenti (con il loro calendario) e cartella
+in cui salvare i documenti.
+
+> **Stato: in sviluppo.** Pronto: pannello di configurazione (chiavi, utenti, selettore della
+> cartella). In arrivo: lettura dei documenti con Gemini, bot Telegram, Google Calendar tramite
+> Composio, consultazione.
+
+## Come funziona
+
+```
+foto ─> bot Telegram (long polling) ─> solo ID approvati ─> Gemini decide il tipo di documento
+                                                              ├─ prenotazione ─> DB + Google Calendar (Composio)
+                                                              ├─ referto      ─> DB + foto nella cartella scelta
+                                                              └─ ricetta/altro ─> DB + foto
+domanda ─> dati della persona dal DB ─> Gemini (con ricerca web) ─> risposta in italiano
+```
+
+- Il bot parla con Telegram in **long polling**: risponde subito e **non serve aprire nessuna porta**.
+  Composio non viene usato per Telegram: il suo toolkit non ha trigger per i messaggi in arrivo né
+  un modo per scaricare le foto. Viene usato per Google Calendar, dove serve.
+- Risponde **solo agli ID Telegram approvati** dal pannello; gli altri sono ignorati in silenzio.
+- Non è un dispositivo medico: non fa diagnosi e invita sempre a sentire il medico.
+
+## Privacy
+
+Le foto dei referti vengono inviate a Gemini. Sul **piano gratuito** dell'API Google può usare i
+contenuti inviati per migliorare i suoi prodotti: per dati sanitari conviene un progetto Google
+Cloud con **fatturazione attiva**, dove i dati non vengono usati per l'addestramento. I documenti
+restano sul tuo server, nella cartella che scegli; il database sta nel volume del container.
+
+## Cosa serve
+
+1. **Bot Telegram**: crealo con @BotFather (`/newbot`) e copia il token.
+2. **Chiave Gemini** da <https://aistudio.google.com/apikey>.
+3. **Chiave Composio** da <https://platform.composio.dev> (per Google Calendar). Ogni persona
+   collega il proprio account Google dal pannello.
+4. L'**ID Telegram** di ciascun utente: basta scrivere a @userinfobot.
+
+## Deploy su Portainer
+
+A ogni push su `main` la GitHub Action esegue i test e pubblica l'immagine
+`ghcr.io/locohub-it/family-health-assistant:latest` (amd64 e arm64). Il repo è pubblico, quindi il
+pacchetto si scarica **senza credenziali**: non serve nessun token in Portainer.
+
+1. Portainer → **Stacks** → Add stack → nome `famiglia` → *Web editor*: incolla
+   `docker-compose.portainer.yml`.
+2. *Environment variables*:
+   - `SECRET_KEY`: stringa lunga casuale, da conservare
+   - `ADMIN_PASSWORD`: almeno 10 caratteri
+   - `STORAGE_ROOT`: cartella **dell'host** che il pannello potrà sfogliare, ad esempio il NAS
+     montato (`/mnt/nas`) o la cartella Documenti del PC
+   - `WEB_PORT`: porta libera sul server (default 8096)
+3. **Deploy the stack**, poi apri `http://<ip-del-server>:<WEB_PORT>`.
+
+Aggiornare dopo un nuovo push: Stacks → `famiglia` → *Update the stack* con **Re-pull image**.
+
+## Avvio con docker compose (senza Portainer)
+
+```bash
+cp .env.example .env      # imposta SECRET_KEY, ADMIN_PASSWORD e STORAGE_ROOT
+docker compose up -d --build
+```
+
+Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensato per la rete locale.
+
+## Primo avvio dal pannello
+
+1. **Chiavi API**: token del bot, chiave Gemini, chiave Composio.
+2. **Cartella**: sfoglia dentro `STORAGE_ROOT`, crea una cartella se serve e scegli
+   «Usa questa cartella». Il pannello controlla che si possa scrivere davvero.
+3. **Utenti**: aggiungi nome e ID Telegram di ogni familiare.
+
+Password del pannello dimenticata:
+`docker compose run --rm famiglia python -m famiglia.set_password`
+
+`SECRET_KEY` cifra le chiavi salvate: se la cambi vanno reinserite. Il database sta in `./data`
+(o nel volume `famiglia-data`): da includere nei backup insieme alla cartella dei documenti.
+
+## Sviluppo
+
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv -e '.[dev]'
+.venv/bin/pytest
+```

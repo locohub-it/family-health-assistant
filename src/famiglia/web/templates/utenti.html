@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Utenti{% endblock %}
+{% block content %}
+<h1>Utenti</h1>
+<p class="hint">Il bot risponde solo a queste persone; chiunque altro viene ignorato in silenzio.
+  Per conoscere il proprio ID Telegram basta scrivere a <b>@userinfobot</b>.</p>
+
+<div class="card">
+  <h2>Utenti approvati</h2>
+  {% if users %}
+  <div class="table-wrap"><table>
+    <tr><th>Nome</th><th>Ruolo</th><th>ID Telegram</th><th>Calendario</th><th></th></tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.name }}</td>
+      <td>{{ u.role }}</td>
+      <td><code>{{ u.telegram_id }}</code></td>
+      <td><span class="hint">{{ u.calendar_id }}</span></td>
+      <td><form method="post" action="/utenti/{{ u.id }}/elimina" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="danger" onclick="return confirm('Rimuovere {{ u.name }}? Verranno cancellati anche i suoi referti e appuntamenti salvati.')">Rimuovi</button></form></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="hint">Nessun utente ancora.</p>{% endif %}
+</div>
+
+<form method="post" action="/utenti" class="card">
+  <h2>Aggiungi utente</h2>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="name">Nome</label>
+  <input id="name" name="name" type="text" maxlength="60" required>
+  <label for="telegram_id">ID Telegram</label>
+  <input id="telegram_id" name="telegram_id" type="number" min="1" required>
+  <label for="role">Ruolo <span class="hint">(facoltativo, es. mamma, papà, figlio)</span></label>
+  <input id="role" name="role" type="text" maxlength="40">
+  <div class="actions"><button class="primary">Aggiungi</button></div>
+</form>
+{% endblock %}

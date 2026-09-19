@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Famiglia{% endblock %} · Pannello</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#667085; --line:#e4e7ec; --accent:#2563eb;
+          --ok:#067647; --ok-bg:#ecfdf3; --err:#b42318; --err-bg:#fef3f2; --info-bg:#eff4ff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#181b22; --text:#e6e8ec; --muted:#98a2b3; --line:#2a2f3a; --accent:#6ea0ff;
+            --ok:#75e0a7; --ok-bg:#0b2a1b; --err:#fda29b; --err-bg:#3a1512; --info-bg:#172040; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:0 16px; }
+  .wrap { max-width:960px; margin:0 auto; }
+  nav { display:flex; flex-wrap:wrap; align-items:center; gap:4px; min-height:56px; }
+  nav .brand { font-weight:700; margin-right:12px; }
+  nav a { color:var(--muted); text-decoration:none; padding:6px 10px; border-radius:6px; }
+  nav a.active, nav a:hover { color:var(--text); background:var(--bg); }
+  nav form { margin-left:auto; }
+  main { padding:24px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 16px; }
+  h2 { font-size:17px; margin:0 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px; margin-bottom:16px; }
+  label { display:block; font-weight:600; margin:14px 0 4px; }
+  label:first-child { margin-top:0; }
+  .hint { color:var(--muted); font-size:13px; font-weight:400; margin-top:2px; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; }
+  textarea { font-family:ui-monospace, Menlo, monospace; font-size:13px; }
+  .check { display:flex; gap:8px; align-items:center; font-weight:600; margin-top:14px; }
+  button { font:inherit; padding:8px 14px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--err); }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+  .flash { padding:10px 14px; border-radius:8px; margin-bottom:8px; background:var(--info-bg); }
+  .flash.ok { background:var(--ok-bg); color:var(--ok); }
+  .flash.error { background:var(--err-bg); color:var(--err); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; background:var(--bg); border:1px solid var(--line); }
+  .badge.ok { color:var(--ok); } .badge.error { color:var(--err); }
+  .table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .preview { white-space:pre-wrap; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:12px 14px; min-height:120px; }
+  .preview a { color:var(--accent); }
+  code { font-family:ui-monospace, Menlo, monospace; font-size:13px; }
+  .inline { display:inline; }
+  /* Il QR deve restare nero su bianco anche in tema scuro, o i lettori non lo leggono. */
+  .qr { background:#fff; padding:12px; border-radius:10px; width:240px; max-width:100%; margin:12px 0; }
+  .qr svg { display:block; width:100%; height:auto; }
+</style>
+</head>
+<body>
+<header><div class="wrap"><nav>
+  <span class="brand">🩺 Family Health</span>
+  <a href="/" class="{{ 'active' if active == 'stato' }}">Stato</a>
+  <a href="/api" class="{{ 'active' if active == 'api' }}">Chiavi API</a>
+  <a href="/utenti" class="{{ 'active' if active == 'utenti' }}">Utenti</a>
+  <a href="/cartella" class="{{ 'active' if active == 'cartella' }}">Cartella</a>
+  <a href="/password" class="{{ 'active' if active == 'password' }}">Password</a>
+  <form method="post" action="/esci"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Esci</button></form>
+</nav></div></header>
+<main class="wrap">
+  {% for kind, message in flashes %}<div class="flash {{ kind }}">{{ message }}</div>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

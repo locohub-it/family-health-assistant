@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Stato{% endblock %}
+{% block content %}
+<h1>Stato</h1>
+
+{% if missing %}
+<div class="card">
+  <h2>Da completare prima di partire</h2>
+  <ul>{% for item in missing %}<li>{{ item }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="grid">
+  <div class="card">
+    <h2>Utenti approvati</h2>
+    {% if users %}
+    <ul>{% for u in users %}<li>{{ u.name }}{% if u.role %} <span class="hint">({{ u.role }})</span>{% endif %}</li>{% endfor %}</ul>
+    {% else %}<p class="hint">Nessuno: il bot non risponderà a nessuno finché non ne aggiungi.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Documenti</h2>
+    <p>Cartella: <b>{{ 'Radice' if s.get('documents_dir') == '.' else (s.get('documents_dir') or 'non scelta') }}</b></p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Attività recente</h2>
+  {% if activity %}
+  <div class="table-wrap"><table>
+    <tr><th>Quando</th><th>Tipo</th><th>Dettaglio</th></tr>
+    {% for a in activity %}
+    <tr><td>{{ a.ts | datetime }}</td><td><span class="badge {{ 'error' if a.kind == 'errore' }}">{{ a.kind }}</span></td><td>{{ a.detail }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="hint">Ancora niente.</p>{% endif %}
+</div>
+{% endblock %}

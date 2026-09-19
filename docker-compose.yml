@@ -1,0 +1,15 @@
+# Avvio locale con build sul posto. Per Portainer usa docker-compose.portainer.yml.
+services:
+  famiglia:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Database e impostazioni (sempre locali al container)
+      - ./data:/app/data
+      # Radice in cui il pannello lascia scegliere la cartella dei documenti:
+      # un NAS montato (es. /mnt/nas) oppure la cartella Documenti del PC.
+      - ${STORAGE_ROOT:?imposta STORAGE_ROOT nel file .env}:/storage
+    ports:
+      # Solo nella rete locale: il bot Telegram usa il long polling, non serve nessuna porta.
+      - "${WEB_PORT:-8080}:8080"
