@@ -205,3 +205,49 @@ def test_the_no_web_variant_keeps_the_same_rule_but_drops_the_web_search():
 
     assert "In generale" in CONSULT_INSTRUCTIONS_NO_WEB
     assert "ricerca web" in CONSULT_INSTRUCTIONS and "ricerca web" not in CONSULT_INSTRUCTIONS_NO_WEB
+
+
+# --- Tetto ai dati inviati -----------------------------------------------------
+
+
+async def fill_history(svc, reports=15):
+    for n in range(1, reports + 1):
+        await upload(svc, svc.mario, referto(date=f"2025-01-{n:02d}", results=[lab(f"Parametro{n}-{k}", str(k)) for k in range(30)]))
+
+
+async def test_a_long_history_fits_the_budget_by_keeping_the_most_recent_documents(make):
+    svc = make()
+    await fill_history(svc)
+    full = svc.consultant.build_context([svc.mario])
+    assert full.count("Parametro") == 15 * 30 and "Per brevità" not in full
+    small = svc.consultant.build_context([svc.mario], budget=9000)
+    assert len(small) <= 9000 and "Per brevità sono mostrati solo i documenti più recenti." in small
+    # restano i più recenti, non i più vecchi
+    assert "Parametro15-0" in small and "Parametro1-0 " not in small
+    assert 0 < small.count("Parametro") < full.count("Parametro")
+
+
+async def test_the_budget_shrinks_step_by_step_and_never_exceeds_it(make):
+    svc = make()
+    await fill_history(svc)
+    sizes = [len(svc.consultant.build_context([svc.mario], budget=b)) for b in (60000, 12000, 6000, 3000, 2000)]
+    assert sizes == sorted(sizes, reverse=True) and all(size <= b for size, b in zip(sizes, (60000, 12000, 6000, 3000, 2000)))
+
+
+async def test_an_extreme_history_is_cut_hard_but_keeps_the_note(make):
+    svc = make()
+    await fill_history(svc, reports=3)
+    text = svc.consultant.build_context([svc.mario], budget=300)
+    assert len(text) <= 300 and text.endswith("(Per brevità sono mostrati solo i documenti più recenti.)")
+
+
+async def test_ask_uses_the_budget_of_the_provider(make):
+    class LimitedAnswerer(FakeAnswerer):
+        def context_budget(self):
+            return 4000
+
+    answerer = LimitedAnswerer("ok")
+    svc = make(answerer)
+    await fill_history(svc)
+    await svc.consultant.ask(svc.mario, question="Come sto?")
+    assert len(answerer.calls[0]["context"]) <= 4000 and "Per brevità" in answerer.calls[0]["context"]

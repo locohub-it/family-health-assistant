@@ -11,6 +11,9 @@ from .openai_compat import OpenAICompat
 from .settings import Settings
 
 CACHE_KEY = "ai_models_cache"
+GEMINI_CONTEXT_CHARS = 60000
+DEFAULT_OTHER_CONTEXT_CHARS = 9000  # circa 3.000 token: sta nel limite di 8.000 al minuto del piano gratuito di Groq
+MIN_CONTEXT_CHARS = 2000
 
 
 class AiRouter:
@@ -30,6 +33,15 @@ class AiRouter:
 
     def model(self, role: str) -> str:
         return self._settings.get(f"ai_{role}_model")
+
+    def context_budget(self) -> int:
+        """Quanti caratteri di dati mandare a ogni domanda: Gemini regge molto, gli altri hanno limiti di token bassi."""
+        if self.provider("chat") == "gemini":
+            return GEMINI_CONTEXT_CHARS
+        try:
+            return max(MIN_CONTEXT_CHARS, int(self._settings.get("ai_context_chars")))
+        except ValueError:
+            return DEFAULT_OTHER_CONTEXT_CHARS
 
     def endpoint(self, provider: str, model: str = "") -> Endpoint:
         preset = PROVIDERS[provider]

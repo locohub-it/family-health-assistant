@@ -345,3 +345,36 @@ async def test_probe_of_a_model_without_vision_tells_what_to_press(world):
     svc.settings.update({"ai_docs_provider": "groq", "ai_docs_model": "llama-3.3-70b-versatile"})
     _, ok, detail = await svc.ai.probe("docs")
     assert not ok and "non sa leggere le immagini" in detail and "Scegli di nuovo in automatico" in detail
+
+
+# --- Tetto dei dati per provider -----------------------------------------------
+
+
+async def test_context_budget_is_large_for_gemini_and_small_for_the_others(world):
+    svc = world()
+    assert svc.ai.context_budget() == 60000
+    svc.settings.update({"ai_chat_provider": "groq"})
+    assert svc.ai.context_budget() == 9000
+    svc.settings.update({"ai_context_chars": "20000"})
+    assert svc.ai.context_budget() == 20000
+    svc.settings.update({"ai_context_chars": "50"})
+    assert svc.ai.context_budget() == 2000  # mai sotto il minimo
+    svc.settings.update({"ai_context_chars": "boh"})
+    assert svc.ai.context_budget() == 9000
+
+
+async def test_a_question_to_groq_carries_only_what_fits_the_budget(world):
+    sent = []
+
+    def ai(request):
+        sent.append(json.loads(request.content)["messages"][1]["content"])
+        return completion("Ok.")
+
+    svc = world(ai=ai)
+    use_groq(svc)
+    for n in range(1, 16):
+        svc.records.add_document(svc.mario.id, 111, "referto", "", f"2025-01-{n:02d}", "", "")
+        doc = svc.db.execute("SELECT max(id) AS id FROM documents")[0]["id"]
+        svc.db.execute("INSERT INTO lab_results (document_id, user_id, result_date, name, value) VALUES (?, ?, '', ?, '1')", (doc, svc.mario.id, "Analisi" + "x" * 400 + str(n)))
+    await svc.consultant.ask(svc.mario, question="Come sto?")
+    assert len(sent[0]) < 9000 + 1500  # dati (entro il tetto) + intestazione e domanda

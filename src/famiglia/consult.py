@@ -16,6 +16,10 @@ from .users import User, UserStore
 MAX_REPORTS = 15
 MAX_APPOINTMENTS = 20
 MAX_OTHER_DOCUMENTS = 10
+# (referti, visite, altri documenti) da tenere, dal più completo al più stringato
+TRIM_STEPS = ((MAX_REPORTS, MAX_APPOINTMENTS, MAX_OTHER_DOCUMENTS), (8, 10, 5), (4, 6, 3), (2, 4, 2), (1, 2, 1))
+DEFAULT_CONTEXT_CHARS = 60000
+TRIM_NOTE = "\n\n(Per brevità sono mostrati solo i documenti più recenti.)"
 TELEGRAM_LIMIT = 4000  # il massimo di Telegram è 4096 caratteri
 
 
@@ -61,14 +65,26 @@ class Consultant:
         allowed = self._records.managed_patient_ids(sender.telegram_id) | {sender.id}
         return [u for u in self._users.all() if u.id in allowed]
 
-    def build_context(self, patients: list[User]) -> str:
-        return "\n\n".join(self._patient_section(p) for p in patients)
+    def build_context(self, patients: list[User], budget: int | None = None) -> str:
+        """Testo con i dati dei familiari. Se supera `budget` caratteri si tengono i documenti più recenti.
 
-    def _patient_section(self, patient: User) -> str:
+        I servizi con un limite basso di token al minuto non reggono uno storico lungo: meglio poche
+        cose recenti che un errore. Si scende a passi (referti, visite, altri documenti) finché sta nel tetto.
+        """
+        budget = budget or DEFAULT_CONTEXT_CHARS
+        context = ""
+        for step, limits in enumerate(TRIM_STEPS):
+            context = "\n\n".join(self._patient_section(p, limits) for p in patients)
+            if len(context) <= budget:
+                return context if step == 0 else context + TRIM_NOTE
+        return context[: max(0, budget - len(TRIM_NOTE))].rstrip() + TRIM_NOTE  # storico enorme: taglio netto
+
+    def _patient_section(self, patient: User, limits: tuple[int, int, int] = TRIM_STEPS[0]) -> str:
+        max_reports, max_appointments, max_others = limits
         title = f"## {patient.name}" + (f" ({patient.role})" if patient.role else "")
         lines = [title]
 
-        reports = self._records.documents(patient.id, ("referto",), MAX_REPORTS)
+        reports = self._records.documents(patient.id, ("referto",), max_reports)
         lines.append("Referti, dal più recente:" if reports else "Nessun referto salvato.")
         for doc in reports:
             when = format_date(doc["doc_date"]) if doc["doc_date"] else "data non indicata"
@@ -84,14 +100,14 @@ class Consultant:
             if doc["details"]:
                 lines.append(_indented("Note del referto", doc["details"]))
 
-        appointments = self._records.appointments(patient.id, MAX_APPOINTMENTS)
+        appointments = self._records.appointments(patient.id, max_appointments)
         lines.append("Visite ed esami prenotati:" if appointments else "Nessuna visita salvata.")
         for a in appointments:
             day, _, hour = a["starts_at"].partition("T")
             place = f" – {a['place']}" if a["place"] else ""
             lines.append(f"- {format_date(day)}{' ' + hour if hour else ''}: {a['title']}{place}")
 
-        others = self._records.documents(patient.id, ("ricetta", "altro"), MAX_OTHER_DOCUMENTS)
+        others = self._records.documents(patient.id, ("ricetta", "altro"), max_others)
         if others:
             lines.append("Ricette e altri documenti:")
             for doc in others:
@@ -102,7 +118,8 @@ class Consultant:
         return "\n".join(lines)
 
     async def ask(self, sender: User, question: str | None = None, audio: bytes | None = None, audio_mime: str = "") -> str:
-        context = self.build_context(self.accessible_patients(sender))
+        budget_of = getattr(self._answerer, "context_budget", None)
+        context = self.build_context(self.accessible_patients(sender), budget_of() if budget_of else None)
         answer = await self._answerer.answer(context, sender.name, question, audio, audio_mime)
         self._log("domanda", f"{sender.name}: {'vocale' if audio else 'testo'}")
         return answer

@@ -102,6 +102,9 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
    cambiare dal menu o scrivere il nome a mano). «Prova» verifica che il modello risponda e, per i
    documenti, che accetti le immagini. Con Groq i vocali si trascrivono con Whisper; la ricerca web di
    Google nelle risposte esiste solo con Gemini. I PDF con testo si leggono con qualsiasi modello.
+   Con i servizi dai limiti di token bassi (il piano gratuito di Groq ammette circa 8.000 token al
+   minuto) a ogni domanda si inviano solo i documenti più recenti, entro un tetto regolabile
+   (`Dati inviati a ogni domanda`); con Gemini il tetto è molto più alto.
 2. **Cartella** (facoltativo): senza scegliere niente il bot salva in `Documenti`, dentro
    `STORAGE_ROOT`, e la crea da solo. Per cambiarla, sfoglia dentro `STORAGE_ROOT`, crea una
    cartella se serve e scegli «Usa questa cartella» (il pannello controlla che si possa

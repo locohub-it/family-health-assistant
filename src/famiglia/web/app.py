@@ -239,6 +239,14 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             flash(request, "error", "L'indirizzo del servizio deve iniziare con http:// o https://")
             return back("/ia")
         values["custom_base_url"] = base_url
+        try:
+            context_chars = int(form.get("ai_context_chars", "").strip() or service.settings.get("ai_context_chars"))
+        except ValueError:
+            context_chars = 0
+        if not 2000 <= context_chars <= 200000:
+            flash(request, "error", "Dati per domanda: inserisci un numero di caratteri tra 2000 e 200000")
+            return back("/ia")
+        values["ai_context_chars"] = str(context_chars)
         for role in ROLES:
             provider = form.get(f"ai_{role}_provider", "gemini")
             if provider not in PROVIDERS:

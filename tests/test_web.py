@@ -543,3 +543,17 @@ def test_repick_requires_login_and_csrf(ia_client):
     assert client.post("/ia/auto", follow_redirects=False).status_code == 303
     login(client)
     assert client.post("/ia/auto").status_code == 403
+
+
+def test_context_size_field_is_saved_and_validated(ia_client):
+    client, service = ia_client
+    token = login(client)
+    base = {"csrf": token, "ai_docs_provider": "gemini", "ai_chat_provider": "gemini"}
+    assert 'value="9000"' in client.get("/ia").text
+    client.post("/ia", data={**base, "ai_context_chars": "15000"})
+    assert service.settings.get("ai_context_chars") == "15000"
+    for bad in ("100", "999999", "molti"):
+        response = client.post("/ia", data={**base, "ai_context_chars": bad})
+        assert "tra 2000 e 200000" in response.text and service.settings.get("ai_context_chars") == "15000"
+    client.post("/ia", data=base)  # campo assente: resta il valore attuale
+    assert service.settings.get("ai_context_chars") == "15000"

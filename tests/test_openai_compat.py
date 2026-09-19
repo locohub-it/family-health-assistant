@@ -286,3 +286,34 @@ async def test_probe_says_why_a_model_cannot_read_images(api):
 def test_the_test_image_is_a_valid_png():
     png = _tiny_png()
     assert png.startswith(b"\x89PNG\r\n\x1a\n") and png.endswith(b"IEND\xaeB`\x82")
+
+
+# --- Richieste troppo grandi per il limite di token ------------------------------
+
+
+async def test_413_for_tokens_says_the_request_is_too_big_for_the_plan_not_the_photo(api):
+    client, seen, slept = api(lambda r: error(413, "Request too large for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Requested 9500"))
+    with pytest.raises(AiError) as exc:
+        await client.answer(GROQ, "", "Mario", "?")
+    assert "troppo grande per il limite di token al minuto" in exc.value.user_message and "Modelli IA" in exc.value.user_message
+    assert exc.value.quota and slept == [] and len(seen) == 1
+
+
+async def test_a_plain_413_is_still_about_the_file(api):
+    client, _, _ = api(lambda r: error(413, "payload too large"))
+    with pytest.raises(AiError) as exc:
+        await client.answer(GROQ, "", "Mario", "?")
+    assert "foto più leggera" in exc.value.user_message and not exc.value.quota
+
+
+async def test_429_whose_request_alone_exceeds_the_limit_is_not_retried(api):
+    client, seen, slept = api(lambda r: error(429, "Rate limit reached on tokens per minute (TPM): Limit 8000, Used 0, Requested 9500. Please try again in 1s.", {"retry-after": "1"}))
+    with pytest.raises(AiError) as exc:
+        await client.answer(GROQ, "", "Mario", "?")
+    assert "troppo grande" in exc.value.user_message and slept == [] and len(seen) == 1
+
+
+async def test_429_within_the_limit_is_an_ordinary_wait(api):
+    answers = iter([error(429, "Rate limit reached on TPM: Limit 8000, Used 7600, Requested 900. Please try again in 3s.", {"retry-after": "3"}), completion("Ecco.")])
+    client, _, slept = api(lambda r: next(answers))
+    assert await client.answer(GROQ, "", "Mario", "?") == "Ecco." and slept == [4.0]

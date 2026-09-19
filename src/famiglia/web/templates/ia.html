@@ -50,6 +50,12 @@
     {% else %}
     <p class="hint">Nessun modello ancora: salva la chiave e premi «Salva e cerca i modelli».</p>
     {% endif %}
+    {% if role == 'chat' %}
+    <label for="ai_context_chars">Dati inviati a ogni domanda <span class="hint">(caratteri, con i servizi diversi da Gemini)</span></label>
+    <input id="ai_context_chars" name="ai_context_chars" type="number" min="2000" max="200000" step="1000" value="{{ s.get('ai_context_chars') }}">
+    <div class="hint">Il piano gratuito di Groq ammette circa 8.000 token al minuto: 9000 caratteri (circa 3.000 token) è un buon
+      valore. Con lo storico più lungo il bot invia solo i documenti più recenti. Con Gemini il limite è molto più alto.</div>
+    {% endif %}
     <label for="ai_{{ role }}_model_manual">…oppure scrivi il nome <span class="hint">(facoltativo, ha la precedenza)</span></label>
     <input id="ai_{{ role }}_model_manual" name="ai_{{ role }}_model_manual" type="text" autocomplete="off" placeholder="{{ c.model or 'nome esatto del modello' }}">
   </div>

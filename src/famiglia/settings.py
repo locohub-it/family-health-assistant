@@ -29,6 +29,7 @@ DEFAULTS: dict[str, str] = {
     "deepseek_api_key": "",
     "custom_api_key": "",
     "custom_base_url": "",
+    "ai_context_chars": "9000",  # dati inviati a ogni domanda con i servizi diversi da Gemini (limiti di token bassi)
     "ai_models_cache": "",  # elenco dei modelli per provider, ricavato dal provider stesso (JSON)
     # Composio (Google Calendar)
     "composio_api_key": "",

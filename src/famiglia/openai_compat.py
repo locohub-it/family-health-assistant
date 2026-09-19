@@ -96,10 +96,25 @@ def _error_for(endpoint: Endpoint, response: httpx.Response) -> AiError:
                 detail,
             )
     if status == 413:
+        if re.search(r"token|tpm|too large for model", message, re.I):
+            return AiError(_too_large_message(endpoint), detail, quota=True)
         return AiError("Il file è troppo grande per questo modello. Prova con una foto più leggera.", detail)
     if status >= 500:
         return AiError(f"{label} in questo momento non risponde. Riprova tra poco.", detail)
     return AiError(f"{label} ha rifiutato la richiesta. Riprova con un'altra foto.", detail)
+
+
+def _too_large_message(endpoint: Endpoint) -> str:
+    return (
+        f"La richiesta è troppo grande per il limite di token al minuto del piano di {endpoint.label}. "
+        "Chi gestisce il bot può ridurre i dati inviati (Modelli IA) o passare a un piano superiore."
+    )
+
+
+def _exceeds_limit(message: str) -> bool:
+    """«Limit 8000, Requested 9500»: la richiesta da sola supera il limite, aspettare non serve a niente."""
+    found = re.search(r"Limit (\d+),?\s*(?:Used \d+,?\s*)?Requested (\d+)", message)
+    return bool(found) and int(found.group(2)) > int(found.group(1))
 
 
 def _quota_message(endpoint: Endpoint, wait: float | None) -> str:
@@ -177,6 +192,8 @@ class OpenAICompat:
                     f"Non riesco a collegarmi a {endpoint.label}: controlla la connessione e riprova.", repr(exc)
                 ) from exc
             if response.status_code == 429:
+                if _exceeds_limit(_message_of(response)):
+                    raise AiError(_too_large_message(endpoint), f"429: {_message_of(response)}", quota=True)
                 wait = _retry_after(response)
                 if attempt < MAX_RETRIES and wait is not None and wait <= MAX_WAIT_SECONDS:
                     await self._sleep(wait + 1)  # limite al minuto: basta aspettare
