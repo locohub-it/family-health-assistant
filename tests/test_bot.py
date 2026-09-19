@@ -298,3 +298,80 @@ async def test_calendar_command_reports_composio_errors(tmp_path, root):
     message = Replies()
     await svc.bot._connect_calendar(command_update(111, message), None)
     assert "Non riesco a usare Google Calendar" in message.texts[0]
+
+
+# --- Consultazione -------------------------------------------------------------
+
+
+class AskMessage(FakeMessage):
+    def __init__(self, text=None, voice=None, **kwargs):
+        super().__init__(**kwargs)
+        self.text, self.voice, self.audio = text, voice, None
+
+
+def ask_update(user_id, message):
+    return SimpleNamespace(effective_user=SimpleNamespace(id=user_id), effective_message=message)
+
+
+@pytest.fixture
+def asker(tmp_path, root):
+    from helpers import FakeAnswerer
+
+    answerer = FakeAnswerer("Il valore è nella norma.")
+    svc = Service(tmp_path / "data", "chiave-di-test", root, reader=FakeReader(referto()), answerer=answerer)
+    svc.mario = svc.users.add(111, "Mario Rossi")
+    svc.answerer = answerer
+    return svc
+
+
+async def test_text_message_is_a_question_answered_after_an_immediate_ack(asker):
+    message = AskMessage(text="In base all'ultimo referto, cosa comportano quei valori?")
+    await asker.bot._text(ask_update(111, message), None)
+    (ack,) = message.replies
+    assert ack.text == "Il valore è nella norma." and ack.markup is None
+    assert asker.answerer.calls[0]["question"] == "In base all'ultimo referto, cosa comportano quei valori?"
+    assert asker.answerer.calls[0]["sender"] == "Mario Rossi"
+
+
+async def test_too_long_question_is_refused_without_asking_gemini(asker):
+    message = AskMessage(text="a" * 2001)
+    await asker.bot._text(ask_update(111, message), None)
+    assert "troppo lungo" in message.replies[0].text and asker.answerer.calls == []
+
+
+async def test_voice_message_is_downloaded_and_sent_as_audio(asker):
+    voice = AskMessage(data=b"OggS-voce").attachment("audio/ogg", 5000)
+    message = AskMessage(voice=voice, data=b"OggS-voce")
+    await asker.bot._voice(ask_update(111, message), None)
+    call = asker.answerer.calls[0]
+    assert call["audio"] == b"OggS-voce" and call["mime"] == "audio/ogg" and call["question"] is None
+    assert message.replies[0].text == "Il valore è nella norma."
+
+
+@pytest.mark.parametrize("mime,size,fragment", [("video/mp4", 100, "non lo so ascoltare"), ("audio/ogg", 50 * 1024 * 1024, "troppo lungo")])
+async def test_unusable_voice_is_refused(asker, mime, size, fragment):
+    message = AskMessage(voice=AskMessage().attachment(mime, size))
+    await asker.bot._voice(ask_update(111, message), None)
+    assert fragment in message.replies[0].text and asker.answerer.calls == []
+
+
+async def test_long_answer_is_split_into_several_messages(asker):
+    asker.answerer.reply = "\n\n".join(f"Parte {i}. " + "y" * 900 for i in range(8))
+    message = AskMessage(text="Spiegami tutto")
+    await asker.bot._text(ask_update(111, message), None)
+    assert len(message.replies) > 1 and all(len(r.text) <= 4000 for r in message.replies)
+
+
+async def test_gemini_failure_in_a_question_gets_a_friendly_reply(asker):
+    asker.answerer.error = GeminiError("Gemini ha ricevuto troppe richieste.")
+    message = AskMessage(text="Come sto?")
+    await asker.bot._text(ask_update(111, message), None)
+    assert message.replies[0].text == "Gemini ha ricevuto troppe richieste."
+
+
+def test_voice_and_text_handlers_are_registered_behind_the_gate(asker):
+    from telegram.ext import Application
+
+    app = Application.builder().token("1:abc").build()
+    asker.bot._register(app)
+    assert len(app.handlers[-1]) == 1 and len(app.handlers[0]) >= 5

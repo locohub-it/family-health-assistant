@@ -21,6 +21,7 @@ from telegram.ext import (
 )
 
 from .calendar import Calendar, CalendarError
+from .consult import Consultant, split_message
 from .documents import MAX_BYTES, SUPPORTED_MIME, DocumentService
 from .gemini import GeminiError
 from .settings import Settings
@@ -31,6 +32,8 @@ log = logging.getLogger(__name__)
 
 RETRY_SECONDS = 30
 ACK_TEXT = "📄 Sto leggendo il documento, un attimo…"
+ASK_ACK_TEXT = "🤔 Ci penso un attimo…"
+MAX_QUESTION_CHARS = 2000
 UNDO_PREFIX = "annulla:"
 
 
@@ -47,12 +50,14 @@ class BotRunner:
         settings: Settings,
         users: UserStore,
         documents: DocumentService,
+        consultant: Consultant,
         record: Callable[[str, str], None],
         calendar: Calendar | None = None,
     ) -> None:
         self._settings = settings
         self._users = users
         self._documents = documents
+        self._consultant = consultant
         self._record = record
         self._calendar = calendar
         self._changed = asyncio.Event()
@@ -112,6 +117,7 @@ class BotRunner:
         app.add_handler(CommandHandler("calendario", self._connect_calendar))
         app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._text))
+        app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self._voice))
         app.add_handler(CallbackQueryHandler(self._undo, pattern=f"^{UNDO_PREFIX}"))
         app.add_error_handler(self._error)
 
@@ -133,7 +139,8 @@ class BotRunner:
         if user:
             await update.effective_message.reply_text(
                 f"Ciao {user.name}! Mandami la foto di un referto, di una ricetta o di una prenotazione "
-                "e ci penso io: non devi scrivere niente."
+                "e ci penso io: non devi scrivere niente.\n\n"
+                "Puoi anche farmi una domanda sui tuoi referti, scritta o a voce."
             )
 
     async def _connect_calendar(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -154,9 +161,40 @@ class BotRunner:
         )
 
     async def _text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.effective_message.reply_text(
-            "Mandami la foto di un referto, di una ricetta o di una prenotazione e ci penso io."
-        )
+        """Un messaggio scritto è una domanda: passa alla consultazione."""
+        user, message = self._approved(update), update.effective_message
+        if user is None or message is None:
+            return
+        question = (message.text or "").strip()
+        if len(question) > MAX_QUESTION_CHARS:
+            await message.reply_text("Il messaggio è troppo lungo. Puoi farmi una domanda più breve?")
+            return
+
+        async def job():
+            return await self._consultant.ask(user, question=question), None
+
+        await self._reply_with_ack(message, ASK_ACK_TEXT, job)
+
+    async def _voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Un vocale è una domanda a voce: Gemini lo ascolta direttamente."""
+        user, message = self._approved(update), update.effective_message
+        if user is None or message is None:
+            return
+        attachment = message.voice or message.audio
+        mime = attachment.mime_type or "audio/ogg"
+        if not mime.startswith("audio/"):
+            await message.reply_text("Questo audio non lo so ascoltare. Prova con un messaggio vocale.")
+            return
+        if attachment.file_size and attachment.file_size > MAX_BYTES:
+            await message.reply_text("L'audio è troppo lungo. Prova con un messaggio più breve.")
+            return
+
+        async def job():
+            file = await attachment.get_file()
+            data = bytes(await file.download_as_bytearray())
+            return await self._consultant.ask(user, audio=data, audio_mime=mime), None
+
+        await self._reply_with_ack(message, ASK_ACK_TEXT, job)
 
     async def _document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user, message = self._approved(update), update.effective_message
@@ -173,18 +211,26 @@ class BotRunner:
             await message.reply_text("Il file è troppo grande. Prova con una foto più leggera.")
             return
 
-        await message.chat.send_action(ChatAction.TYPING)
-        ack = await message.reply_text(ACK_TEXT)  # risposta immediata, poi la si sostituisce col risultato
-        markup = None
-        try:
+        async def job():
             file = await attachment.get_file()
             data = bytes(await file.download_as_bytearray())
             outcome = await self._documents.process(user, data, mime)
-            text = outcome.text
+            markup = None
             if outcome.document_id:
                 markup = InlineKeyboardMarkup(
                     [[InlineKeyboardButton("↩️ Annulla", callback_data=f"{UNDO_PREFIX}{outcome.document_id}")]]
                 )
+            return outcome.text, markup
+
+        await self._reply_with_ack(message, ACK_TEXT, job)
+
+    async def _reply_with_ack(self, message, ack_text: str, job) -> None:
+        """Risposta immediata, poi la si sostituisce col risultato. L'utente riceve sempre qualcosa."""
+        await message.chat.send_action(ChatAction.TYPING)
+        ack = await message.reply_text(ack_text)
+        markup = None
+        try:
+            text, markup = await job()
         except GeminiError as exc:
             text = exc.user_message
             self._note("errore", f"Gemini: {exc}")
@@ -195,10 +241,13 @@ class BotRunner:
             text = "Ho un problema di connessione con Telegram. Riprova tra poco."
             self._note("errore", f"Rete: {exc}")
         except Exception as exc:  # noqa: BLE001 - l'utente deve sempre ricevere una risposta
-            log.exception("Errore imprevisto con un documento")
+            log.exception("Errore imprevisto")
             text = "Qualcosa è andato storto. Riprova tra poco."
             self._note("errore", f"Imprevisto: {exc!r}")
-        await ack.edit_text(text, reply_markup=markup)
+        first, *rest = split_message(text) or [text]
+        await ack.edit_text(first, reply_markup=markup)
+        for part in rest:  # una risposta lunga può superare il limite di Telegram
+            await message.reply_text(part)
 
     async def _undo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query, user = update.callback_query, self._approved(update)

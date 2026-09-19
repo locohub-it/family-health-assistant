@@ -13,12 +13,11 @@ che l'utente scriva nulla.
 Tutto si configura da una **pagina web**: chiavi API, utenti (con il loro calendario) e cartella
 in cui salvare i documenti.
 
-> **Stato: in sviluppo.**
-> Pronto: pannello di configurazione, bot Telegram che legge foto e PDF con Gemini, salva referti,
-> appuntamenti, ricette e altri documenti (con «Annulla»), visite sul Google Calendar di ciascuno
-> tramite Composio. Testato con Gemini, Telegram e Composio simulati: la prima prova con le chiavi
-> vere è da fare.
-> In arrivo: la modalità consultazione (domande e vocali).
+> **Stato: pronto per la prima prova.**
+> Pannello di configurazione; bot Telegram che legge foto e PDF con Gemini e salva referti,
+> appuntamenti, ricette e altri documenti (con «Annulla»); visite sul Google Calendar di ciascuno
+> tramite Composio; domande scritte o a voce con risposta di Gemini sui dati salvati.
+> Testato con Gemini, Telegram e Composio simulati: la prima prova con le chiavi vere è da fare.
 
 ## Come funziona
 
@@ -30,6 +29,9 @@ foto ─> bot Telegram (long polling) ─> solo ID approvati ─> Gemini decide 
 domanda ─> dati della persona dal DB ─> Gemini (con ricerca web) ─> risposta in italiano
 ```
 
+- **Domande**: un messaggio scritto o un vocale è una domanda. Gemini riceve lo storico di chi scrive
+  (e dei familiari per cui ha inviato documenti, non degli altri) e risponde in italiano semplice,
+  con la ricerca web di Google per spiegare i valori. Spiega e rimanda al medico: non fa diagnosi.
 - Il bot parla con Telegram in **long polling**: risponde subito e **non serve aprire nessuna porta**.
   Composio non viene usato per Telegram: il suo toolkit non ha trigger per i messaggi in arrivo né
   un modo per scaricare le foto. Viene usato per Google Calendar, dove serve.

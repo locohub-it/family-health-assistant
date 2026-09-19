@@ -55,3 +55,24 @@ class Records:
     def delete_document(self, document_id: int) -> None:
         """Le righe collegate (valori, appuntamenti) spariscono con il documento (ON DELETE CASCADE)."""
         self._db.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+
+    # --- Lettura per la consultazione ---------------------------------------------
+
+    def managed_patient_ids(self, sender_telegram_id: int) -> set[int]:
+        """Familiari per cui questa persona ha inviato documenti (oltre a sé stessa)."""
+        rows = self._db.execute("SELECT DISTINCT user_id FROM documents WHERE sender_telegram_id = ?", (sender_telegram_id,))
+        return {r["user_id"] for r in rows}
+
+    def documents(self, user_id: int, kinds: tuple[str, ...], limit: int):
+        marks = ",".join("?" for _ in kinds)
+        return self._db.execute(
+            f"SELECT * FROM documents WHERE user_id = ? AND kind IN ({marks}) "
+            "ORDER BY COALESCE(NULLIF(doc_date, ''), strftime('%Y-%m-%d', created_at, 'unixepoch')) DESC, id DESC LIMIT ?",
+            (user_id, *kinds, limit),
+        )
+
+    def lab_results_of(self, document_id: int):
+        return self._db.execute("SELECT * FROM lab_results WHERE document_id = ? ORDER BY id", (document_id,))
+
+    def appointments(self, user_id: int, limit: int):
+        return self._db.execute("SELECT * FROM appointments WHERE user_id = ? ORDER BY starts_at DESC LIMIT ?", (user_id, limit))

@@ -81,3 +81,16 @@ class FakeComposio:
         self.list_calls.append(kwargs)
         wanted = set(kwargs["user_ids"])
         return SimpleNamespace(items=[SimpleNamespace(user_id=u) for u in self.connected if u in wanted])
+
+
+class FakeAnswerer:
+    """Al posto di Gemini per le domande: registra cosa riceve e risponde con un testo fisso."""
+
+    def __init__(self, reply="Risposta di prova.", error=None):
+        self.reply, self.error, self.calls = reply, error, []
+
+    async def answer(self, context, sender_name, question=None, audio=None, audio_mime=""):
+        self.calls.append({"context": context, "sender": sender_name, "question": question, "audio": audio, "mime": audio_mime})
+        if self.error:
+            raise self.error
+        return self.reply
