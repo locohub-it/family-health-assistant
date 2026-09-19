@@ -245,7 +245,7 @@ def test_cannot_choose_a_calendar_that_is_not_in_the_list(cal_client):
 def test_consumer_key_ck_is_refused_with_an_explanation(client, service):
     token = login(client)
     response = client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "composio_api_key": "ck_abcdef123456"})
-    assert "Project API key" in response.text and "ak_" in response.text
+    assert "Project API key" in response.text and "ak_" in response.text and "Settings → API Keys" in response.text
     assert service.settings.get("composio_api_key") == ""
 
 

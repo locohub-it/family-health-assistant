@@ -57,8 +57,9 @@ la sua sede. Controlla le condizioni prima di usare dati sanitari veri; un servi
 1. **Bot Telegram**: crealo con @BotFather (`/newbot`) e copia il token.
 2. **Un servizio AI** con la sua chiave: Gemini (<https://aistudio.google.com/apikey>), Groq, DeepSeek o
    qualunque servizio compatibile OpenAI. Si inseriscono dal pannello, a mano, quanti se ne vuole.
-3. **Chiave Composio** (per Google Calendar): la **Project API key** (`ak_…`) da <https://platform.composio.dev>,
-   nelle impostazioni del progetto. Non la chiave `ck_…` (consumer, per MCP): il pannello la rifiuta. Ogni persona
+3. **Chiave Composio** (per Google Calendar): la **Project API key** (`ak_…`): su <https://dashboard.composio.dev> scegli
+   **Platform** (non «For You»), apri il progetto, poi *Settings → API Keys*. Non la chiave `ck_…` della pagina
+   Sessions / AI Client (consumer, per MCP): il pannello la rifiuta. Ogni persona
    collega il proprio account Google dal pannello.
 4. L'**ID Telegram** di ciascun utente: basta scrivere a @userinfobot.
 

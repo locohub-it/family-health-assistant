@@ -26,9 +26,14 @@ DEFAULT_MINUTES = 60
 UNKNOWN_TIME = "09:00"  # se sul documento manca l'ora: l'evento è segnato «orario da confermare»
 
 
-BAD_KEY_MESSAGE = (
-    "La chiave Composio non è valida o non ha i permessi: chi gestisce il bot deve controllarla in "
-    "«Chiavi API» (serve la Project API key, quella che inizia con ak_)."
+WHERE_IS_THE_KEY = (
+    "si trova su dashboard.composio.dev: scegli «Platform» (non «For You»), apri il tuo progetto, poi "
+    "Settings → API Keys, e copia o crea la chiave che inizia con ak_"
+)
+BAD_KEY_MESSAGE = f"La chiave Composio non è valida o non ha i permessi. Serve la Project API key: {WHERE_IS_THE_KEY}."
+CONSUMER_KEY_MESSAGE = (
+    "La chiave Composio inserita inizia con ck_: è una chiave «consumer», quella della pagina Sessions / AI Client, "
+    f"che serve per MCP e non funziona con il calendario. Serve la Project API key: {WHERE_IS_THE_KEY}."
 )
 
 
@@ -78,6 +83,8 @@ class Calendar:
         key = self._settings.get("composio_api_key")
         if not key:
             raise CalendarError("Google Calendar non è configurato: manca la chiave Composio.")
+        if key.startswith("ck_"):  # salvata prima che il pannello la rifiutasse: inutile chiedere a Composio
+            raise CalendarError(CONSUMER_KEY_MESSAGE)
         if self._client is None or key != self._client_key:
             self._client, self._client_key = self._factory(key), key
         return self._client

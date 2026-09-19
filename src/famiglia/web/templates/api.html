@@ -18,10 +18,11 @@
     <h2>Composio (Google Calendar)</h2>
     <label for="composio_api_key">Chiave API {% if s.is_set('composio_api_key') %}<span class="badge ok">impostata</span>{% endif %}</label>
     <input id="composio_api_key" name="composio_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('composio_api_key') else 'ak_…' }}">
-    <div class="hint">Serve la <b>Project API key</b> (inizia con <code>ak_</code>), da
-      <a href="https://platform.composio.dev" target="_blank" rel="noopener">platform.composio.dev</a>, nelle impostazioni del progetto.
-      Non la chiave <code>ck_</code> (consumer, per MCP). Se la crei con permessi limitati, servono quelli su
-      esecuzione degli strumenti e collegamenti; con accesso completo funziona tutto.
+    <div class="hint">Serve la <b>Project API key</b> (inizia con <code>ak_</code>). Si trova su
+      <a href="https://dashboard.composio.dev" target="_blank" rel="noopener">dashboard.composio.dev</a>: scegli <b>Platform</b>
+      (non «For You»), apri il tuo progetto, poi <b>Settings → API Keys</b>. Se non c'è nessuna chiave, creane una con
+      accesso completo (o, se limiti i permessi, con scrittura su esecuzione degli strumenti e collegamenti).
+      La chiave <code>ck_</code> della pagina Sessions / AI Client è un'altra cosa (serve per MCP) e non funziona qui.
       Serve solo per aggiungere le visite ai calendari; senza, il bot salva comunque referti e appuntamenti.</div>
   </div>
 

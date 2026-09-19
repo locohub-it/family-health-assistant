@@ -207,7 +207,19 @@ async def test_invalid_composio_key_gets_a_clear_message_with_the_real_detail(ma
     with pytest.raises(CalendarError) as exc:
         await svc.calendar.is_connected(svc.mario)
     assert "chiave Composio non è valida" in exc.value.user_message and "ak_" in exc.value.user_message
+    assert "Settings → API Keys" in exc.value.user_message  # dice anche dove trovarla
     assert "Invalid API key: ck_**Tf9l" in str(exc.value)  # il dettaglio resta per il pannello
+
+
+async def test_a_saved_consumer_key_is_explained_without_calling_composio(make):
+    composio = FakeComposio()
+    calls = []
+    composio.connected_accounts.list = lambda **kw: calls.append(kw)
+    svc = make(composio, key="ck_vecchia123")
+    with pytest.raises(CalendarError) as exc:
+        await svc.calendar.is_connected(svc.mario)
+    assert "ck_" in exc.value.user_message and "consumer" in exc.value.user_message and "Platform" in exc.value.user_message
+    assert calls == []  # nessuna richiesta inutile a Composio
 
 
 async def test_a_403_permission_error_gets_the_same_clear_message(make):

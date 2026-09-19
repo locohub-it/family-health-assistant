@@ -18,7 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from ..ai import KINDS, ROLES, SUGGESTED_ADDRESSES, AiError, NotConfigured
 from ..auth import set_password, verify_password
-from ..calendar import CalendarError
+from ..calendar import CONSUMER_KEY_MESSAGE, CalendarError
 from ..clock import TIMEZONE
 from ..documents import DEFAULT_DOCUMENTS_DIR
 from ..service import Service
@@ -177,12 +177,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         for key in ("bot_token", "composio_api_key"):
             secret_field(form, key, values)
         if values.get("composio_api_key", "").startswith("ck_"):
-            flash(
-                request,
-                "error",
-                "Quella è una chiave «consumer» (ck_…), che serve per MCP. Per il calendario serve la "
-                "Project API key: su platform.composio.dev, nelle impostazioni del progetto, chiave che inizia con ak_.",
-            )
+            flash(request, "error", CONSUMER_KEY_MESSAGE)
             return back("/api")
         settings.update(values)
         flash(request, "ok", "Chiavi salvate")
