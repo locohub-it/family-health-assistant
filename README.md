@@ -34,6 +34,16 @@ domanda ─> dati della persona dal DB ─> modello AI scelto (Gemini, Groq…) 
   distinguendo ciò che legge nei documenti dalle spiegazioni generali («In generale…»). Il bot **non
   cerca sul web** e non conosce la posizione di nessuno: a «l'oculista più vicino» risponde che non può
   e suggerisce il medico di base. Spiega e rimanda al medico: non fa diagnosi.
+- **Visite**: entrano solo in due modi, mai da una frase scritta (così una domanda come «ho appuntamenti il
+  26 marzo?» non può essere scambiata per un inserimento): dalla **foto** di una prenotazione o di un documento,
+  oppure con **`/visita`**, un passaggio guidato a pulsanti (per chi è → per quando → che visita è → conferma).
+  Data e ora si scrivono a mano («26/10 alle 15», «26 ottobre 15:30», «domani alle 9») e sono lette con regole
+  fisse, senza intelligenza artificiale: se non si capisce con certezza, il bot chiede di riscriverle.
+  **`/appuntamenti`** mostra le prossime visite, ciascuna con i pulsanti *Modifica* (data e ora, tipo, luogo)
+  ed *Elimina* (con conferma); anche scrivere esattamente «modifica appuntamento» o «elimina appuntamento»
+  apre l'elenco. Sul calendario (anche del coordinatore) la visita viene rifatta o tolta. Ognuno gestisce le
+  visite sue e quelle dei familiari per cui ha inviato documenti o segnato visite. I comandi compaiono anche
+  nel menu di Telegram.
 - Il bot parla con Telegram in **long polling**: risponde subito e **non serve aprire nessuna porta**.
   Composio non viene usato per Telegram: il suo toolkit non ha trigger per i messaggi in arrivo né
   un modo per scaricare le foto. Viene usato per Google Calendar, dove serve.

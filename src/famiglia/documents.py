@@ -14,7 +14,7 @@ from typing import Callable
 
 from . import clock
 from .calendar import UNKNOWN_TIME, Calendar, CalendarError, PastDateError
-from .gemini import DocumentReader, Extraction
+from .gemini import AppointmentInfo, DocumentReader, Extraction
 from .records import Records
 from .settings import Settings
 from .storage import Storage, StorageError
@@ -36,10 +36,14 @@ FOLDERS = {"appuntamento": "Appuntamenti", "referto": "Referti", "ricetta": "Ric
 TITLES = re.compile(r"\b(sig\.ra|dott\.ssa|signora|signor|sigg|sig|dott|dr|prof|paziente)\b\.?", re.IGNORECASE)
 
 
+NOT_FOUND = "Questa visita non c'è più, oppure non puoi cambiarla."
+
+
 @dataclass
 class Outcome:
     text: str
     document_id: int | None = None  # se valorizzato il bot mostra il pulsante «Annulla»
+    appointment_id: int | None = None  # visita inserita con i pulsanti: da qui si può modificare o eliminare
 
 
 def _tokens(name: str) -> set[str]:
@@ -225,7 +229,7 @@ class DocumentService:
         return "\n".join(line for line in lines if line)
 
     async def _add_to_calendar(
-        self, patient: User, appointment_id: int, starts_at: str, title: str, place: str, notes: str
+        self, patient: User, appointment_id: int, starts_at: str, title: str, place: str, notes: str, updated: bool = False
     ) -> str:
         """Il calendario è un di più: se non va, la visita resta salvata e l'utente lo sa."""
         if self._calendar is None or not self._calendar.enabled:
@@ -240,7 +244,7 @@ class DocumentService:
             lines.append(f"⚠️ {exc.user_message}")
         else:
             self._records.set_event_id(appointment_id, event_id)
-            line = f"📅 L'ho aggiunta al calendario di {patient.name}."
+            line = f"📅 Ho aggiornato il calendario di {patient.name}." if updated else f"📅 L'ho aggiunta al calendario di {patient.name}."
             lines.append(line if "T" in starts_at else f"{line} L'ora non c'era: ho messo le {UNKNOWN_TIME}, da confermare.")
 
         coordinator = coordinator_of(self._settings, self._users)
@@ -276,19 +280,15 @@ class DocumentService:
         self._log("annullato", f"documento {document_id}")
         return "Annullato: ho tolto il documento." + warning
 
-    async def _remove_calendar_events(self, document) -> str:
-        """Toglie la visita dal calendario del paziente e da quello del coordinatore che l'aveva ricevuta."""
+    async def _delete_events(self, appointment, patient: User | None) -> tuple[int, bool]:
+        """Toglie una visita dal calendario del paziente e da quello del coordinatore. Restituisce (tolte, qualcuna non riuscita)."""
         if self._calendar is None:
-            return ""
-        patient = self._users.get(document["user_id"])
+            return 0, False
         targets: list[tuple[User | None, str]] = []
-        for appointment in self._records.appointments_of_document(document["id"]):
-            if appointment["event_id"]:
-                targets.append((patient, appointment["event_id"]))
-            if appointment["coordinator_event_id"]:
-                targets.append((self._users.get(appointment["coordinator_user_id"]), appointment["coordinator_event_id"]))
-        if not targets:
-            return ""
+        if appointment["event_id"]:
+            targets.append((patient, appointment["event_id"]))
+        if appointment["coordinator_event_id"]:
+            targets.append((self._users.get(appointment["coordinator_user_id"]), appointment["coordinator_event_id"]))
         removed, failed = 0, False
         for user, event_id in targets:
             if user is None:  # l'utente non c'è più: non si sa su quale calendario agire
@@ -300,6 +300,92 @@ class DocumentService:
             except CalendarError as exc:
                 self._log("errore", f"Calendario di {user.name}: {exc}")
                 failed = True
+        return removed, failed
+
+    async def _remove_calendar_events(self, document) -> str:
+        """Toglie le visite del documento dal calendario del paziente e da quello del coordinatore che le aveva ricevute."""
+        patient = self._users.get(document["user_id"])
+        removed, failed = 0, False
+        for appointment in self._records.appointments_of_document(document["id"]):
+            done, bad = await self._delete_events(appointment, patient)
+            removed, failed = removed + done, failed or bad
         if failed:
             return "\n⚠️ Non sono riuscito a togliere la visita da un calendario: va cancellata a mano."
+        if not removed:
+            return ""
         return "\nHo tolto anche la visita dal calendario." if removed == 1 else "\nHo tolto anche la visita dai calendari."
+
+    # --- Visite inserite, modificate o tolte con i pulsanti --------------------------------
+
+    def manageable_ids(self, sender: User) -> set[int]:
+        """Persone di cui `sender` può gestire le visite: sé stesso e i familiari per cui ha inviato documenti o visite."""
+        return self._records.managed_patient_ids(sender.telegram_id) | {sender.id}
+
+    def upcoming_appointments(self, sender: User, limit: int = 8):
+        """Le prossime visite di chi scrive e dei familiari che gestisce."""
+        return self._records.upcoming_appointments(self.manageable_ids(sender), clock.now().strftime("%Y-%m-%d"), limit)
+
+    def own_appointment(self, sender: User, appointment_id: int):
+        """(visita, paziente) se esiste e `sender` può gestirla, altrimenti (None, None)."""
+        row = self._records.get_appointment(appointment_id)
+        patient = self._users.get(row["user_id"]) if row else None
+        if row is None or patient is None or patient.id not in self.manageable_ids(sender):
+            return None, None
+        return row, patient
+
+    async def add_appointment(self, sender: User, patient: User, starts_at: str, title: str, place: str = "") -> Outcome:
+        """Visita inserita a mano: si salva come quelle lette dai documenti (database, calendario, coordinatore), senza file."""
+        day, _, hour = starts_at.partition("T")
+        extraction = Extraction(
+            kind="appuntamento",
+            patient_name=patient.full_name,
+            document_date=clock.now().strftime("%Y-%m-%d"),
+            summary=f"Visita segnata con i pulsanti: {title}",
+            details="",
+            appointment=AppointmentInfo(title=title, date=day, time=hour, place=place, notes=""),
+            lab_results=[],
+        )
+        document_id = self._records.add_document(
+            patient.id, sender.telegram_id, "appuntamento", "", extraction.document_date, extraction.summary,
+            extraction.model_dump_json(), "",
+        )
+        text = await self._save_appointment(document_id, patient, extraction)
+        self._log("documento", f"{patient.name}: visita segnata con i pulsanti")
+        saved = self._records.appointments_of_document(document_id)
+        return Outcome(text, document_id, saved[0]["id"] if saved else None)
+
+    async def edit_appointment(
+        self, sender: User, appointment_id: int, *, starts_at: str | None = None, title: str | None = None, place: str | None = None
+    ) -> str:
+        """Cambia data, tipo o luogo. Sul calendario la visita si rifà: si toglie la vecchia e si mette la nuova."""
+        row, patient = self.own_appointment(sender, appointment_id)
+        if row is None:
+            return NOT_FOUND
+        new_start = row["starts_at"] if starts_at is None else starts_at
+        new_title = row["title"] if title is None else title
+        new_place = row["place"] if place is None else place
+        _, failed = await self._delete_events(row, patient)
+        self._records.clear_event_ids(appointment_id)
+        self._records.update_appointment(appointment_id, new_start, new_title, new_place)
+        lines = [await self._add_to_calendar(patient, appointment_id, new_start, new_title, new_place, row["notes"], updated=True)]
+        if failed:
+            lines.append("⚠️ Non sono riuscito a togliere la vecchia visita da un calendario: va cancellata a mano.")
+        self._log("appuntamento", f"{patient.name}: visita modificata")
+        return "\n".join(line for line in lines if line)
+
+    async def delete_appointment(self, sender: User, appointment_id: int) -> str:
+        """Toglie la visita dal database e dai calendari. Il documento da cui viene resta, tranne se era inserita a mano."""
+        row, patient = self.own_appointment(sender, appointment_id)
+        if row is None:
+            return NOT_FOUND
+        removed, failed = await self._delete_events(row, patient)
+        document_id = row["document_id"]
+        self._records.delete_appointment(appointment_id)
+        document = self._records.get_document(document_id)
+        if document is not None and not document["file_path"] and not self._records.appointments_of_document(document_id):
+            self._records.delete_document(document_id)  # una visita senza file non ha altro da conservare
+        self._log("appuntamento", f"{patient.name}: visita eliminata")
+        text = f"Ho eliminato la visita «{row['title']}» di {patient.name}."
+        if failed:
+            return text + "\n⚠️ Non sono riuscito a toglierla da un calendario: va cancellata a mano."
+        return text + ("\nÈ sparita anche dal calendario." if removed == 1 else "\nÈ sparita anche dai calendari." if removed else "")

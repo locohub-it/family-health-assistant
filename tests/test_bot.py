@@ -309,6 +309,11 @@ class AskMessage(FakeMessage):
         self.text, self.voice, self.audio = text, voice, None
 
 
+def context():
+    """Il contesto che Telegram passa a ogni handler: `user_data` è lo stato privato di ciascun utente."""
+    return SimpleNamespace(user_data={})
+
+
 def ask_update(user_id, message):
     return SimpleNamespace(effective_user=SimpleNamespace(id=user_id), effective_message=message)
 
@@ -326,7 +331,7 @@ def asker(tmp_path, root):
 
 async def test_text_message_is_a_question_answered_after_an_immediate_ack(asker):
     message = AskMessage(text="In base all'ultimo referto, cosa comportano quei valori?")
-    await asker.bot._text(ask_update(111, message), None)
+    await asker.bot._text(ask_update(111, message), context())
     (ack,) = message.replies
     assert ack.text == "Il valore è nella norma." and ack.markup is None
     assert asker.answerer.calls[0]["question"] == "In base all'ultimo referto, cosa comportano quei valori?"
@@ -335,7 +340,7 @@ async def test_text_message_is_a_question_answered_after_an_immediate_ack(asker)
 
 async def test_too_long_question_is_refused_without_asking_gemini(asker):
     message = AskMessage(text="a" * 2001)
-    await asker.bot._text(ask_update(111, message), None)
+    await asker.bot._text(ask_update(111, message), context())
     assert "troppo lungo" in message.replies[0].text and asker.answerer.calls == []
 
 
@@ -358,14 +363,14 @@ async def test_unusable_voice_is_refused(asker, mime, size, fragment):
 async def test_long_answer_is_split_into_several_messages(asker):
     asker.answerer.reply = "\n\n".join(f"Parte {i}. " + "y" * 900 for i in range(8))
     message = AskMessage(text="Spiegami tutto")
-    await asker.bot._text(ask_update(111, message), None)
+    await asker.bot._text(ask_update(111, message), context())
     assert len(message.replies) > 1 and all(len(r.text) <= 4000 for r in message.replies)
 
 
 async def test_gemini_failure_in_a_question_gets_a_friendly_reply(asker):
     asker.answerer.error = GeminiError("Gemini ha ricevuto troppe richieste.")
     message = AskMessage(text="Come sto?")
-    await asker.bot._text(ask_update(111, message), None)
+    await asker.bot._text(ask_update(111, message), context())
     assert message.replies[0].text == "Gemini ha ricevuto troppe richieste."
 
 

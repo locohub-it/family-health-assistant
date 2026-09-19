@@ -59,6 +59,35 @@ class Records:
             (coordinator_user_id, event_id, appointment_id),
         )
 
+    def get_appointment(self, appointment_id: int):
+        rows = self._db.execute("SELECT * FROM appointments WHERE id = ?", (appointment_id,))
+        return rows[0] if rows else None
+
+    def upcoming_appointments(self, user_ids: Iterable[int], from_date: str, limit: int):
+        """Le visite di queste persone da `from_date` (AAAA-MM-GG) in poi, la più vicina per prima."""
+        ids = list(user_ids)
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        return self._db.execute(
+            f"SELECT * FROM appointments WHERE user_id IN ({marks}) AND starts_at >= ? ORDER BY starts_at, id LIMIT ?",
+            (*ids, from_date, limit),
+        )
+
+    def update_appointment(self, appointment_id: int, starts_at: str, title: str, place: str) -> None:
+        self._db.execute(
+            "UPDATE appointments SET starts_at = ?, title = ?, place = ? WHERE id = ?", (starts_at, title, place, appointment_id)
+        )
+
+    def clear_event_ids(self, appointment_id: int) -> None:
+        self._db.execute(
+            "UPDATE appointments SET event_id = '', coordinator_user_id = 0, coordinator_event_id = '' WHERE id = ?",
+            (appointment_id,),
+        )
+
+    def delete_appointment(self, appointment_id: int) -> None:
+        self._db.execute("DELETE FROM appointments WHERE id = ?", (appointment_id,))
+
     def get_document(self, document_id: int):
         rows = self._db.execute("SELECT * FROM documents WHERE id = ?", (document_id,))
         return rows[0] if rows else None

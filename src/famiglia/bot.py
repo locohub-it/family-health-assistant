@@ -27,6 +27,7 @@ from .ai import AiError
 from .settings import Settings
 from .storage import StorageError
 from .users import User, UserStore
+from .visits import Reply, Visits, wants_list
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,17 @@ ACK_TEXT = "📄 Sto leggendo il documento, un attimo…"
 ASK_ACK_TEXT = "🤔 Ci penso un attimo…"
 MAX_QUESTION_CHARS = 2000
 UNDO_PREFIX = "annulla:"
+MENU = [
+    ("visita", "Segna una nuova visita"),
+    ("appuntamenti", "Vedi, cambia o togli le tue visite"),
+    ("calendario", "Collega il tuo Google Calendar"),
+]
+
+
+def _markup(reply: Reply) -> InlineKeyboardMarkup | None:
+    if not reply.buttons:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=code) for label, code in row] for row in reply.buttons])
 
 
 def _scrub(text: str, token: str) -> str:
@@ -53,6 +65,7 @@ class BotRunner:
         consultant: Consultant,
         record: Callable[[str, str], None],
         calendar: Calendar | None = None,
+        visits: Visits | None = None,
     ) -> None:
         self._settings = settings
         self._users = users
@@ -60,6 +73,7 @@ class BotRunner:
         self._consultant = consultant
         self._record = record
         self._calendar = calendar
+        self._visits = visits
         self._changed = asyncio.Event()
         self.status = "non avviato"
 
@@ -99,6 +113,7 @@ class BotRunner:
         await app.initialize()  # verifica il token con Telegram
         try:
             await app.start()
+            await self._publish_menu(app)
             await app.updater.start_polling(allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY])
             self.status = f"in ascolto come @{app.bot.username}"
             log.info("Bot Telegram %s", self.status)
@@ -110,15 +125,25 @@ class BotRunner:
                 except Exception:  # noqa: BLE001 - in chiusura conta solo arrivare in fondo
                     log.debug("Errore in chiusura del bot", exc_info=True)
 
+    async def _publish_menu(self, app: Application) -> None:
+        """L'elenco dei comandi sotto al pulsante «Menu» di Telegram: si toccano invece di scriverli."""
+        try:
+            await app.bot.set_my_commands(MENU)
+        except TelegramError as exc:  # il menu è un comodo in più: il bot funziona anche senza
+            self._note("errore", f"Menu dei comandi non impostato: {_scrub(str(exc), self._settings.get('bot_token'))}")
+
     def _register(self, app: Application) -> None:
         # Il cancello sta nel gruppo -1: se non passa, nessun altro handler vede l'aggiornamento.
         app.add_handler(TypeHandler(Update, self._gate), group=-1)
         app.add_handler(CommandHandler("start", self._start))
         app.add_handler(CommandHandler(["calendario", "calendar"], self._connect_calendar))
+        app.add_handler(CommandHandler("visita", self._new_visit))
+        app.add_handler(CommandHandler("appuntamenti", self._list_visits))
         app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self._voice))
         app.add_handler(CallbackQueryHandler(self._undo, pattern=f"^{UNDO_PREFIX}"))
+        app.add_handler(CallbackQueryHandler(self._visit_button, pattern=r"^[va]:"))
         # Per ultimo: un comando sconosciuto non deve cadere nel vuoto senza risposta.
         app.add_handler(MessageHandler(filters.COMMAND, self._unknown_command))
         app.add_error_handler(self._error)
@@ -142,7 +167,10 @@ class BotRunner:
             await update.effective_message.reply_text(
                 f"Ciao {user.name}! Mandami la foto di un referto, di una ricetta o di una prenotazione "
                 "e ci penso io: non devi scrivere niente.\n\n"
-                "Puoi anche farmi una domanda sui tuoi referti, scritta o a voce."
+                "Puoi anche farmi una domanda sui tuoi referti, scritta o a voce.\n\n"
+                "Per le visite:\n"
+                "/visita – segna una nuova visita\n"
+                "/appuntamenti – vedi, cambia o togli le tue visite"
             )
 
     async def _connect_calendar(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -162,19 +190,65 @@ class BotRunner:
             "Per collegare il tuo Google Calendar apri questo link e accedi con il tuo account Google:\n" + link
         )
 
+    async def _new_visit(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user, message = self._approved(update), update.effective_message
+        if user is None or message is None or self._visits is None:
+            return
+        await self._send_replies(message, [self._visits.start_new(user, context.user_data)])
+
+    async def _list_visits(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user, message = self._approved(update), update.effective_message
+        if user is None or message is None or self._visits is None:
+            return
+        context.user_data.clear()
+        await self._send_replies(message, self._visits.list_cards(user))
+
+    async def _visit_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query, user = update.callback_query, self._approved(update)
+        if query is None or user is None or self._visits is None:
+            return
+        await query.answer()
+        try:
+            reply = await self._visits.on_button(user, context.user_data, query.data)
+        except CalendarError as exc:
+            self._note("errore", f"Calendario: {exc}")
+            reply = Reply(exc.user_message)
+        except Exception as exc:  # noqa: BLE001 - chi tocca un pulsante deve sempre ricevere una risposta
+            log.exception("Errore in un pulsante")
+            self._note("errore", f"Imprevisto: {exc!r}")
+            reply = Reply("Qualcosa è andato storto. Riprova tra poco.")
+        first, *rest = split_message(reply.text) or [reply.text]
+        await query.edit_message_text(first, reply_markup=_markup(reply) if not rest else None)
+        for part in rest:
+            await query.message.reply_text(part, reply_markup=_markup(reply) if part is rest[-1] else None)
+
+    async def _send_replies(self, message, replies: list[Reply]) -> None:
+        for reply in replies:
+            await message.reply_text(reply.text, reply_markup=_markup(reply))
+
     async def _unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if self._approved(update) and update.effective_message:
             await update.effective_message.reply_text(
-                "Questo comando non lo conosco. Per collegare il calendario scrivi /calendario; "
+                "Questo comando non lo conosco. Puoi usare /visita, /appuntamenti e /calendario; "
                 "altrimenti mandami la foto di un documento o scrivimi una domanda."
             )
 
     async def _text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Un messaggio scritto è una domanda: passa alla consultazione."""
+        """Un messaggio scritto è una domanda, tranne durante un passaggio guidato e per «modifica/elimina appuntamento»."""
         user, message = self._approved(update), update.effective_message
         if user is None or message is None:
             return
         question = (message.text or "").strip()
+        if self._visits is not None:
+            action = wants_list(question)
+            if action:
+                context.user_data.clear()
+                await self._send_replies(message, self._visits.list_cards(user, action))
+                return
+            reply = await self._visits.on_text(user, context.user_data, question)
+            if reply is not None:
+                await self._send_replies(message, [reply])
+                return
         if len(question) > MAX_QUESTION_CHARS:
             await message.reply_text("Il messaggio è troppo lungo. Puoi farmi una domanda più breve?")
             return

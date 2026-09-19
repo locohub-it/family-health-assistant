@@ -21,6 +21,7 @@ from .services import AiServices
 from .records import Records
 from .settings import BOT_KEYS, Settings
 from .storage import Storage, StorageError
+from .visits import Visits
 from .users import UserStore
 
 
@@ -52,7 +53,8 @@ class Service:
             self.settings, self.users, self.storage, self.records, reader or self.ai, self.log, self.calendar, self.fallback_storage
         )
         self.consultant = Consultant(self.users, self.records, answerer or self.ai, self.log)
-        self.bot = BotRunner(self.settings, self.users, self.documents, self.consultant, self.log, self.calendar)
+        self.visits = Visits(self.users, self.documents)
+        self.bot = BotRunner(self.settings, self.users, self.documents, self.consultant, self.log, self.calendar, self.visits)
         self.settings.on_change(self._settings_changed)
 
     def _settings_changed(self, keys: set[str]) -> None:
