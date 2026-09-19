@@ -156,6 +156,43 @@ def test_the_instructions_say_there_is_no_web_and_how_to_answer_search_requests(
     assert "In generale" in CONSULT_INSTRUCTIONS
 
 
+async def test_what_the_booking_sheet_says_to_bring_reaches_the_model(make):
+    svc = make()
+    await upload(svc, svc.mario, appuntamento(date="2099-10-28", time="11:40", title="Ecocolordoppler cardiaco", place="Taranto, Via Ancona",
+                                              notes="Portare i documenti delle ultime visite"))
+    context = svc.consultant.build_context([svc.mario])
+    assert "28/10/2099 11:40: Ecocolordoppler cardiaco – Taranto, Via Ancona" in context
+    assert "Da ricordare (scritto sul foglio della prenotazione): Portare i documenti delle ultime visite" in context
+
+
+async def test_a_visit_without_notes_adds_no_empty_reminder_line(make):
+    svc = make()
+    await upload(svc, svc.mario, appuntamento(date="2099-10-28", time="11:40", notes=""))
+    assert "Da ricordare" not in svc.consultant.build_context([svc.mario])
+
+
+async def test_a_visit_without_a_time_says_the_time_is_to_be_confirmed(make):
+    svc = make()
+    await upload(svc, svc.mario, appuntamento(date="2099-10-28", time=""))
+    assert "28/10/2099 (ora da confermare):" in svc.consultant.build_context([svc.mario])
+
+
+def test_the_instructions_make_the_bot_a_secretary_for_questions_about_visits():
+    from famiglia.gemini import CONSULT_INSTRUCTIONS
+
+    assert "fai la segretaria, non il medico" in CONSULT_INSTRUCTIONS
+    assert "Non spiegare in cosa consiste la visita" in CONSULT_INSTRUCTIONS
+    assert "Da ricordare" in CONSULT_INSTRUCTIONS and "con le stesse parole" in CONSULT_INSTRUCTIONS
+    assert "ora da confermare" in CONSULT_INSTRUCTIONS
+
+
+def test_the_instructions_ask_for_short_answers_without_greetings_or_closing_lines():
+    from famiglia.gemini import CONSULT_INSTRUCTIONS
+
+    assert "SOLO a ciò che ti è stato chiesto" in CONSULT_INSTRUCTIONS
+    assert "Niente saluti" in CONSULT_INSTRUCTIONS and "frasi di chiusura" in CONSULT_INSTRUCTIONS
+
+
 # --- Tetto ai dati inviati -----------------------------------------------------
 
 

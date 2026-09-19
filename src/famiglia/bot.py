@@ -27,7 +27,7 @@ from .ai import AiError
 from .settings import Settings
 from .storage import StorageError
 from .users import User, UserStore
-from .visits import Reply, Visits, wants_list
+from .visits import Reply, Visits, offer_new_visit, wants_list, wants_new_visit
 
 log = logging.getLogger(__name__)
 
@@ -248,6 +248,9 @@ class BotRunner:
             reply = await self._visits.on_text(user, context.user_data, question)
             if reply is not None:
                 await self._send_replies(message, [reply])
+                return
+            if wants_new_visit(question):  # non si segna niente da una frase: si propone il passaggio guidato
+                await self._send_replies(message, [offer_new_visit()])
                 return
         if len(question) > MAX_QUESTION_CHARS:
             await message.reply_text("Il messaggio è troppo lungo. Puoi farmi una domanda più breve?")

@@ -9,7 +9,7 @@ from telegram.ext import Application
 from famiglia import clock
 from famiglia.bot import MENU, UNDO_PREFIX
 from famiglia.service import Service
-from famiglia.visits import CONFIRM, FLOW_TTL, NEW, Visits, wants_list
+from famiglia.visits import CONFIRM, FLOW_TTL, NEW, Visits, wants_list, wants_new_visit
 from famiglia.when import WhenError, is_past, make_title, parse_when
 
 from helpers import FakeAnswerer, FakeComposio, FakeReader, appuntamento, referto
@@ -116,6 +116,42 @@ def test_only_the_two_exact_phrases_open_the_lists(text, action):
 )
 def test_no_other_sentence_is_taken_for_a_command(text):
     assert wants_list(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "prenota una visita",
+        "Prenotami una visita dal cardiologo",
+        "metti una visita dalla dottoressa il 26 ottobre alle 15",
+        "vorrei segnare un appuntamento",
+        "devo fissare un esame del sangue",
+        "puoi aggiungere una visita al calendario?",
+        "imposta una visita per il 26 ottobre alle 15",
+    ],
+)
+def test_requests_to_book_a_visit_make_the_offer_appear(text):
+    assert wants_new_visit(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ho appuntamenti per il 26 marzo alle 15?",
+        "quante visite ho per ottobre?",
+        "quando è la mia prossima visita?",
+        "ho già prenotato l'ecografia?",
+        "ho segnato una visita ieri?",
+        "cosa devo portare alla visita?",
+        "il colesterolo è alto?",
+        "elimina appuntamento",
+        "modifica appuntamento",
+        "prenota",
+        "una visita",
+    ],
+)
+def test_questions_about_visits_never_make_the_offer_appear(text):
+    assert not wants_new_visit(text)
 
 
 # --- Servizio con calendario finto ------------------------------------------------------------------
@@ -684,3 +720,46 @@ async def test_start_and_unknown_command_point_to_the_new_commands(make):
     other = Message()
     await svc.bot._unknown_command(update(111, other), context())
     assert "/visita" in other.replies[0].text
+
+
+async def test_book_a_visit_sentence_offers_the_walk_and_saves_nothing(make):
+    svc = make(users=1)
+    message = Message("metti una visita dalla dottoressa il 26 ottobre alle 15")
+    await svc.bot._text(update(111, message), context())
+    (offer,) = message.replies
+    assert offer.text == "Vuoi segnare una nuova visita?" and labels(offer.markup) == ["➕ Sì, segna una visita", "No, grazie"]
+    assert codes(offer.markup) == [NEW, "v:x"]
+    assert svc.answerer.calls == [] and svc.db.execute("SELECT * FROM appointments") == [] and svc.composio.executed == []
+
+
+async def test_accepting_the_offer_opens_the_walk_in_place(make):
+    svc = make(users=1)
+    ctx = context()
+    upd, tap = tap_update(111, NEW)
+    await svc.bot._visit_button(upd, ctx)
+    text, markup = tap.edited[0]
+    assert "Per quando" in text and ctx.user_data["step"] == "when" and svc.db.execute("SELECT * FROM appointments") == []
+
+
+async def test_declining_the_offer_changes_nothing(make):
+    svc = make(users=1)
+    upd, tap = tap_update(111, "v:x")
+    await svc.bot._visit_button(upd, context())
+    assert "non ho cambiato niente" in tap.edited[0][0] and svc.db.execute("SELECT * FROM appointments") == []
+
+
+async def test_a_question_about_visits_is_answered_and_gets_no_offer(make):
+    svc = make(users=1)
+    message = Message("quante visite ho per ottobre?")
+    await svc.bot._text(update(111, message), context())
+    assert message.replies[0].text == "Risposta alla domanda." and message.replies[0].markup is None
+
+
+async def test_the_walk_in_progress_wins_over_the_offer(make):
+    svc = make(users=1)
+    ctx = context()
+    await svc.bot._new_visit(update(111, Message()), ctx)
+    await svc.bot._text(update(111, Message("26/10/2099 alle 15")), ctx)
+    message = Message("prenota una visita dalla dottoressa")  # è la risposta a «Che visita è?»
+    await svc.bot._text(update(111, message), ctx)
+    assert "Controlla se va bene" in message.replies[0].text

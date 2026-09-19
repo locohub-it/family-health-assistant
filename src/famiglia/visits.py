@@ -22,6 +22,17 @@ NEW, CANCEL, CONFIRM, PICK = "v:n", "v:x", "v:ok", "v:p:"  # prefissi dei pulsan
 
 _PHRASE = re.compile(r"^\s*(modifica|elimina)\s+(?:l['’]\s*)?(?:gli\s+)?appuntament[oi]\s*[.!]?\s*$", re.IGNORECASE)
 
+# Solo imperativo e infinito («prenota», «segnare»): «ho prenotato», «quante visite ho» restano domande.
+_BOOK_VERB = re.compile(
+    r"\b(prenot(?:a|are|ami)|segn(?:a|are|ami)|mett(?:i|ere|imi)|aggiung(?:i|ere)|fiss(?:a|are|ami)|impost(?:a|are|ami)|"
+    r"inserisc(?:i|ire)|registr(?:a|are)|cre(?:a|are)|programm(?:a|are)|organizz(?:a|are))\b",
+    re.IGNORECASE,
+)
+_BOOK_NOUN = re.compile(
+    r"\b(visit\w*|appuntament\w*|control\w*|esam\w*|analisi|prelievo|prelievi|ecograf\w*|risonanza|radiograf\w*|vaccin\w*|tac)\b",
+    re.IGNORECASE,
+)
+
 WHEN_PROMPT = "Per quando è la visita? Scrivimi il giorno e, se lo sai, l'ora. Per esempio:\n• 26/10 alle 15\n• 26 ottobre 15:30\n• domani alle 9"
 TITLE_PROMPT = "Che visita è? Scrivimelo in poche parole, per esempio: dalla dottoressa Rossi, oculista, prelievo del sangue."
 EXPIRED = "Questa richiesta è scaduta. Per ricominciare scrivi /visita."
@@ -38,6 +49,15 @@ def wants_list(text: str) -> str | None:
     """«modifica appuntamento» → "edit", «elimina appuntamento» → "delete"; qualunque altra frase → None."""
     found = _PHRASE.match(text or "")
     return {"modifica": "edit", "elimina": "delete"}[found.group(1).lower()] if found else None
+
+
+def wants_new_visit(text: str) -> bool:
+    """Sembra la richiesta di segnare una visita? Non la segna: fa solo comparire il pulsante che apre /visita."""
+    return bool(_BOOK_VERB.search(text or "") and _BOOK_NOUN.search(text or ""))
+
+
+def offer_new_visit() -> Reply:
+    return Reply("Vuoi segnare una nuova visita?", [[("➕ Sì, segna una visita", NEW), ("No, grazie", CANCEL)]])
 
 
 def _when_text(starts_at: str) -> str:

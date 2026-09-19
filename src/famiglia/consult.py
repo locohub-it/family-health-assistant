@@ -105,7 +105,10 @@ class Consultant:
         for a in appointments:
             day, _, hour = a["starts_at"].partition("T")
             place = f" – {a['place']}" if a["place"] else ""
-            lines.append(f"- {format_date(day)}{' ' + hour if hour else ''}: {a['title']}{place}")
+            when = f"{format_date(day)} {hour}" if hour else f"{format_date(day)} (ora da confermare)"
+            lines.append(f"- {when}: {a['title']}{place}")
+            if a["notes"]:
+                lines.append(f"  Da ricordare (scritto sul foglio della prenotazione): {a['notes']}")
 
         others = self._records.documents(patient.id, ("ricetta", "altro"), max_others)
         if others:
