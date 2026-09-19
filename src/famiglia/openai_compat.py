@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from . import clock
 from .ai import AiError, Endpoint
 from .ai import tiny_png as _tiny_png
-from .gemini import ANALYZE_INSTRUCTIONS, CONSULT_INSTRUCTIONS, Extraction
+from .gemini import ANALYZE_INSTRUCTIONS, CONSULT_INSTRUCTIONS, REQUEST_INSTRUCTIONS, AppointmentRequest, Extraction, request_prompt
 
 MAX_PARALLEL_CALLS = 2
 MAX_RETRIES = 2
@@ -30,6 +30,11 @@ JSON_RULES = (
     '{"title": "", "date": "AAAA-MM-GG", "time": "HH:MM", "place": "", "notes": ""}. lab_results è una lista, anche vuota.\n'
     '{"kind": "referto", "patient_name": "", "document_date": "AAAA-MM-GG", "summary": "", "details": "", '
     '"appointment": null, "lab_results": [{"name": "", "value": "", "unit": "", "reference": "", "flag": ""}]}'
+)
+REQUEST_JSON_RULES = (
+    "\nRispondi SOLO con un oggetto JSON valido, senza testo prima o dopo e senza blocchi di codice, con esattamente "
+    "questi campi. is_request è true o false.\n"
+    '{"is_request": true, "patient_name": "", "title": "", "date": "AAAA-MM-GG", "time": "HH:MM", "place": "", "notes": ""}'
 )
 
 
@@ -167,6 +172,24 @@ def parse_extraction(text: str, endpoint: Endpoint) -> Extraction:
         ) from exc
 
 
+def parse_appointment_request(text: str, endpoint: Endpoint) -> AppointmentRequest:
+    start, end = text.find("{"), text.rfind("}")
+    try:
+        if start < 0 or end < start:
+            raise ValueError("nessun oggetto JSON nella risposta")
+        obj = json.loads(text[start : end + 1])
+        flag = obj.get("is_request")
+        return AppointmentRequest(
+            is_request=flag if isinstance(flag, bool) else _text(flag).lower() in {"true", "vero", "sì", "si", "1"},
+            **{k: _text(obj.get(k)) for k in ("patient_name", "title", "date", "time", "place", "notes")},
+        )
+    except (ValueError, ValidationError, AttributeError) as exc:
+        raise AiError(
+            "Non sono riuscito a capire la richiesta con questo modello. Riprova a scriverla con data e ora.",
+            f"{endpoint.label}: risposta non valida ({exc}): {text[:200]!r}",
+        ) from exc
+
+
 class OpenAICompat:
     def __init__(self, http: httpx.AsyncClient | None = None) -> None:
         self._http = http
@@ -263,6 +286,13 @@ class OpenAICompat:
             raise AiError(f"{endpoint.label} non legge questo formato di file: manda una foto in formato JPEG o PNG.")
         messages = [{"role": "system", "content": ANALYZE_INSTRUCTIONS + JSON_RULES}, {"role": "user", "content": user}]
         return parse_extraction(await self._chat(endpoint, messages, temperature=0, json_mode=True), endpoint)
+
+    async def parse_appointment_request(self, endpoint: Endpoint, text: str) -> AppointmentRequest:
+        messages = [
+            {"role": "system", "content": REQUEST_INSTRUCTIONS + REQUEST_JSON_RULES},
+            {"role": "user", "content": request_prompt(text)},
+        ]
+        return parse_appointment_request(await self._chat(endpoint, messages, temperature=0, json_mode=True), endpoint)
 
     async def answer(self, endpoint: Endpoint, context: str, sender_name: str, question: str) -> str:
         intro = f"Oggi è il {clock.now().strftime('%Y-%m-%d')}. Scrive {sender_name}.\n\nDATI DELLA FAMIGLIA:\n{context}\n\n"

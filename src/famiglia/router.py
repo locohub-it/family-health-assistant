@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Awaitable, Callable, TypeVar
 
 from .ai import ROLES, AiError, Endpoint, NotConfigured, suggest_model, vision_candidates, whisper_model
-from .gemini import Extraction, Gemini
+from .gemini import AppointmentRequest, Extraction, Gemini
 from .openai_compat import OpenAICompat
 from .services import AiService, AiServices
 from .settings import Settings
@@ -92,6 +92,14 @@ class AiRouter:
             return await self._backend(service).analyze_document(endpoint, data, mime)
 
         return await self._run("docs", action)
+
+    async def parse_appointment_request(self, text: str) -> AppointmentRequest:
+        """Capisce se un messaggio scritto chiede di segnare una visita, e quando (modello delle domande, solo testo)."""
+
+        async def action(service: AiService, endpoint: Endpoint) -> AppointmentRequest:
+            return await self._backend(service).parse_appointment_request(endpoint, text)
+
+        return await self._run("chat", action)
 
     async def answer(
         self, context: str, sender_name: str, question: str | None = None, audio: bytes | None = None, audio_mime: str = ""
