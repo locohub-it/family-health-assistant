@@ -28,26 +28,11 @@ def altro(kind="altro", patient="", details="", date=""):
     )
 
 
-def richiesta(is_request=True, date="2026-10-26", time="15:00", title="Visita dalla dottoressa", patient="", place="", notes=""):
-    from famiglia.gemini import AppointmentRequest
-
-    return AppointmentRequest(
-        is_request=is_request, patient_name=patient, title=title, date=date, time=time, place=place, notes=notes
-    )
-
-
 class FakeReader:
     """Al posto di Gemini: restituisce quello che gli si è preparato e conta le chiamate."""
 
-    def __init__(self, extraction: Extraction | None = None, error: Exception | None = None, request=None):
+    def __init__(self, extraction: Extraction | None = None, error: Exception | None = None):
         self.extraction, self.error, self.calls = extraction, error, []
-        self.request, self.request_calls = request, []
-
-    async def parse_appointment_request(self, text: str):
-        self.request_calls.append(text)
-        if self.error:
-            raise self.error
-        return self.request
 
     async def analyze_document(self, data: bytes, mime: str) -> Extraction:
         self.calls.append((len(data), mime))

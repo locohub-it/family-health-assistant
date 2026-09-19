@@ -14,7 +14,7 @@ from typing import Callable
 
 from . import clock
 from .calendar import UNKNOWN_TIME, Calendar, CalendarError, PastDateError
-from .gemini import AppointmentInfo, DocumentReader, Extraction
+from .gemini import DocumentReader, Extraction
 from .records import Records
 from .settings import Settings
 from .storage import Storage, StorageError
@@ -34,24 +34,6 @@ DEFAULT_DOCUMENTS_DIR = "Documenti"  # dentro la radice: si usa se non ne è sta
 FALLBACK_PREFIX = "@volume/"  # ultima spiaggia: la cartella nel volume dei dati, sempre scrivibile
 FOLDERS = {"appuntamento": "Appuntamenti", "referto": "Referti", "ricetta": "Ricette", "altro": "Altro"}
 TITLES = re.compile(r"\b(sig\.ra|dott\.ssa|signora|signor|sigg|sig|dott|dr|prof|paziente)\b\.?", re.IGNORECASE)
-
-
-# Un messaggio scritto passa all'estrazione solo se sembra una richiesta di segnare qualcosa: le domande normali
-# non pagano una chiamata in più al modello. Sarà poi il modello a decidere se lo è davvero.
-_ASK_VERB = re.compile(
-    r"\b(impost\w*|mett\w*|aggiung\w*|segn\w*|fiss\w*|prenot\w*|inserisc\w*|registr\w*|cre[ai]\w*|salv\w*|"
-    r"ricord\w*|programm\w*|organizz\w*)",
-    re.IGNORECASE,
-)
-_ASK_NOUN = re.compile(
-    r"\b(visit\w*|appuntament\w*|control\w*|esam\w*|analisi|prelievo|prelievi|ecograf\w*|risonanza|radiograf\w*|tac|"
-    r"vaccin\w*|calendario|agenda|dottor\w*|medico|dentista|oculista|specialista)\b",
-    re.IGNORECASE,
-)
-
-
-def looks_like_appointment_request(text: str) -> bool:
-    return bool(_ASK_VERB.search(text) and _ASK_NOUN.search(text))
 
 
 @dataclass
@@ -152,47 +134,6 @@ class DocumentService:
         text = await self._save_details(document_id, patient, extraction, doc_date)
         self._log("documento", f"{patient.name}: {kind}")
         return Outcome(note + text, document_id)
-
-    async def add_appointment_from_text(self, sender: User, text: str) -> Outcome | None:
-        """Una visita scritta a mano («metti una visita il 26 ottobre alle 15»).
-
-        Restituisce None se il messaggio non è una richiesta di questo tipo: allora è una domanda normale.
-        Il salvataggio è quello dei documenti (database, calendario, coordinatore, «Annulla»), senza il file.
-        """
-        if not looks_like_appointment_request(text):
-            return None
-        request = await self._gemini.parse_appointment_request(text)
-        if not request.is_request:
-            return None
-        day = _valid_date(request.date)
-        if not day:
-            return Outcome(
-                "Ho capito che vuoi segnare una visita, ma non so per quando. Riscrivimela con la data, per esempio: "
-                "«metti una visita dalla dottoressa il 26 ottobre alle 15»."
-            )
-        hour = _valid_time(request.time)
-        if (f"{day}T{hour}" < clock.now().strftime("%Y-%m-%dT%H:%M")) if hour else (day < clock.now().strftime("%Y-%m-%d")):
-            return Outcome(
-                f"La data che ho capito è il {format_date(day)}, ma è già passata: non l'ho segnata. "
-                "Riscrivimela con la data giusta, anche con l'anno."
-            )
-        patient, note = self._resolve_patient(request.patient_name, sender)
-        extraction = Extraction(
-            kind="appuntamento",
-            patient_name=request.patient_name,
-            document_date=clock.now().strftime("%Y-%m-%d"),
-            summary=f"Visita segnata a mano: {request.title.strip() or 'Visita medica'}",
-            details=text.strip(),
-            appointment=AppointmentInfo(title=request.title, date=day, time=hour, place=request.place, notes=request.notes),
-            lab_results=[],
-        )
-        document_id = self._records.add_document(
-            patient.id, sender.telegram_id, "appuntamento", "", extraction.document_date, extraction.summary,
-            extraction.model_dump_json(), extraction.details,
-        )
-        reply = await self._save_appointment(document_id, patient, extraction)
-        self._log("documento", f"{patient.name}: appuntamento scritto a mano")
-        return Outcome(note + reply, document_id)
 
     async def _save_file(self, parts: list[str], filename: str, data: bytes) -> str:
         """Salva il file: cartella scelta, poi quella predefinita, poi il volume dei dati.

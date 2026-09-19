@@ -34,12 +34,6 @@ domanda ─> dati della persona dal DB ─> modello AI scelto (Gemini, Groq…) 
   distinguendo ciò che legge nei documenti dalle spiegazioni generali («In generale…»). Il bot **non
   cerca sul web** e non conosce la posizione di nessuno: a «l'oculista più vicino» risponde che non può
   e suggerisce il medico di base. Spiega e rimanda al medico: non fa diagnosi.
-- **Visite scritte a mano**: un messaggio come «metti una visita dalla dottoressa il 26 ottobre alle 15» viene
-  salvato e messo sul calendario come se fosse un documento (con «Annulla», anche sul calendario del
-  coordinatore). Solo i messaggi che sembrano una richiesta di questo tipo (verbo come metti/segna/prenota/
-  imposta + visita, esame, controllo…) fanno una chiamata in più al modello delle domande, che decide se lo
-  sono davvero, e capisce «domani» o «lunedì prossimo». Se manca la data chiede di riscriverla; una data già
-  passata non viene segnata. Funziona per i messaggi scritti, non ancora per i vocali.
 - Il bot parla con Telegram in **long polling**: risponde subito e **non serve aprire nessuna porta**.
   Composio non viene usato per Telegram: il suo toolkit non ha trigger per i messaggi in arrivo né
   un modo per scaricare le foto. Viene usato per Google Calendar, dove serve.

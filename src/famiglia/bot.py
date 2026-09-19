@@ -22,7 +22,7 @@ from telegram.ext import (
 
 from .calendar import Calendar, CalendarError
 from .consult import Consultant, split_message
-from .documents import MAX_BYTES, SUPPORTED_MIME, DocumentService, Outcome
+from .documents import MAX_BYTES, SUPPORTED_MIME, DocumentService
 from .ai import AiError
 from .settings import Settings
 from .storage import StorageError
@@ -35,12 +35,6 @@ ACK_TEXT = "📄 Sto leggendo il documento, un attimo…"
 ASK_ACK_TEXT = "🤔 Ci penso un attimo…"
 MAX_QUESTION_CHARS = 2000
 UNDO_PREFIX = "annulla:"
-
-
-def _undo_markup(outcome: Outcome) -> InlineKeyboardMarkup | None:
-    if not outcome.document_id:
-        return None
-    return InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Annulla", callback_data=f"{UNDO_PREFIX}{outcome.document_id}")]])
 
 
 def _scrub(text: str, token: str) -> str:
@@ -148,8 +142,7 @@ class BotRunner:
             await update.effective_message.reply_text(
                 f"Ciao {user.name}! Mandami la foto di un referto, di una ricetta o di una prenotazione "
                 "e ci penso io: non devi scrivere niente.\n\n"
-                "Puoi anche farmi una domanda sui tuoi referti, scritta o a voce, oppure scrivermi una visita da segnare "
-                "sul calendario, per esempio: «metti una visita dalla dottoressa il 26 ottobre alle 15»."
+                "Puoi anche farmi una domanda sui tuoi referti, scritta o a voce."
             )
 
     async def _connect_calendar(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -177,7 +170,7 @@ class BotRunner:
             )
 
     async def _text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Un messaggio scritto è una domanda, salvo che chieda di segnare una visita."""
+        """Un messaggio scritto è una domanda: passa alla consultazione."""
         user, message = self._approved(update), update.effective_message
         if user is None or message is None:
             return
@@ -187,9 +180,6 @@ class BotRunner:
             return
 
         async def job():
-            outcome = await self._documents.add_appointment_from_text(user, question)
-            if outcome is not None:
-                return outcome.text, _undo_markup(outcome)
             return await self._consultant.ask(user, question=question), None
 
         await self._reply_with_ack(message, ASK_ACK_TEXT, job)
@@ -234,7 +224,12 @@ class BotRunner:
             file = await attachment.get_file()
             data = bytes(await file.download_as_bytearray())
             outcome = await self._documents.process(user, data, mime)
-            return outcome.text, _undo_markup(outcome)
+            markup = None
+            if outcome.document_id:
+                markup = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("↩️ Annulla", callback_data=f"{UNDO_PREFIX}{outcome.document_id}")]]
+                )
+            return outcome.text, markup
 
         await self._reply_with_ack(message, ACK_TEXT, job)
 
