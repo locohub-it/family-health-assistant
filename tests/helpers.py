@@ -58,8 +58,11 @@ class FakeComposio:
         from types import SimpleNamespace
 
         self.tools = SimpleNamespace(execute=self._execute)
-        self.toolkits = SimpleNamespace(authorize=self._authorize)
-        self.connected_accounts = SimpleNamespace(list=self._list)
+        self.auth_config_ids: list[str] = []  # quelli già presenti nel progetto; se vuoto, ne viene creato uno
+        self.created_configs: list[tuple[str, dict]] = []
+        self.auth_configs = SimpleNamespace(list=self._auth_configs_list, create=self._auth_configs_create)
+        # Come l'SDK vero: `toolkits.authorize` non c'è più tra le chiamate su cui contare (Composio l'ha ritirata).
+        self.connected_accounts = SimpleNamespace(list=self._list, link=self._link)
 
     def _execute(self, slug, arguments, *, user_id=None, dangerously_skip_version_check=None, **kwargs):
         self.executed.append((slug, arguments, user_id))
@@ -73,10 +76,22 @@ class FakeComposio:
             return {"successful": True, "data": {"response_data": {"id": f"evt{122 + created}", "summary": arguments["summary"]}}, "error": None}
         return {"successful": True, "data": {}, "error": None}
 
-    def _authorize(self, *, user_id, toolkit):
+    def _auth_configs_list(self, **query):
         from types import SimpleNamespace
 
-        self.authorized.append(f"{user_id}:{toolkit}")
+        assert query == {"toolkit_slug": "googlecalendar"}
+        return SimpleNamespace(items=[SimpleNamespace(id=i, created_at=f"2026-01-0{n}", status="ENABLED") for n, i in enumerate(self.auth_config_ids, 1)])
+
+    def _auth_configs_create(self, toolkit, options):
+        from types import SimpleNamespace
+
+        self.created_configs.append((toolkit, options))
+        return SimpleNamespace(id="ac_nuovo")
+
+    def _link(self, user_id, auth_config_id, **kwargs):
+        from types import SimpleNamespace
+
+        self.authorized.append(f"{user_id}:{auth_config_id}")
         return SimpleNamespace(redirect_url=self.link, id="ca_1")
 
     def _list(self, **kwargs):

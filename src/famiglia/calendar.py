@@ -95,6 +95,8 @@ class Calendar:
         except CalendarError:
             raise
         except Exception as exc:  # noqa: BLE001 - qualunque errore dell'SDK diventa un messaggio gentile
+            if type(exc).__name__ == "ComposioMultipleConnectedAccountsError":
+                raise CalendarError("Il Google Calendar di questa persona è già collegato.", f"{type(exc).__name__}: {exc}") from exc
             if getattr(exc, "status_code", None) in (401, 403) or "invalid api key" in str(exc).lower():
                 raise CalendarError(BAD_KEY_MESSAGE, f"{type(exc).__name__}: {exc}") from exc
             raise CalendarError(
@@ -119,12 +121,24 @@ class Calendar:
         """Indirizzo su cui la persona autorizza il proprio Google Calendar."""
 
         def call() -> str:
-            request = self._composio().toolkits.authorize(user_id=user.composio_user_id, toolkit=TOOLKIT)
+            composio = self._composio()
+            # `toolkits.authorize()` usa una chiamata che Composio ha ritirato per i collegamenti Google gestiti da
+            # lei (dal 3 luglio 2026): si recupera l'auth config e si chiede il link con `connected_accounts.link()`.
+            request = composio.connected_accounts.link(user.composio_user_id, self._auth_config_id(composio))
             if not request.redirect_url:
                 raise CalendarError("Composio non ha dato il link di collegamento.")
             return request.redirect_url
 
         return await self._run(call)
+
+    @staticmethod
+    def _auth_config_id(composio: Any) -> str:
+        """L'auth config di Google Calendar del progetto; se non c'è, si crea con l'accesso gestito da Composio."""
+        found = composio.auth_configs.list(toolkit_slug=TOOLKIT)
+        usable = [c for c in (found.items or []) if str(getattr(c, "status", "ENABLED")).upper() != "DISABLED"]
+        if usable:
+            return max(usable, key=lambda c: str(getattr(c, "created_at", ""))).id
+        return composio.auth_configs.create(TOOLKIT, {"type": "use_composio_managed_auth"}).id
 
     async def connected_user_ids(self, users: list[User]) -> set[str]:
         """Quali utenti hanno un Google Calendar collegato e attivo."""

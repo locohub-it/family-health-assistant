@@ -214,7 +214,7 @@ def test_connect_page_shows_link_and_qr(cal_client):
     response = client.post(f"/utenti/{service.anna.id}/collega", data={"csrf": token})
     assert response.status_code == 200
     assert "https://connect.composio.dev/link/ln_abc" in response.text and "<svg" in response.text
-    assert composio.authorized == ["famiglia-222:googlecalendar"]
+    assert composio.authorized == ["famiglia-222:ac_nuovo"]
 
 
 def test_connect_requires_csrf_and_login(cal_client):

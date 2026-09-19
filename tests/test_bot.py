@@ -278,7 +278,7 @@ async def test_calendar_command_sends_the_connect_link(tmp_path, root):
     message = Replies()
     await svc.bot._connect_calendar(command_update(111, message), None)
     assert "https://connect.composio.dev/link/ln_abc" in message.texts[0]
-    assert composio.authorized == ["famiglia-111:googlecalendar"]
+    assert composio.authorized == ["famiglia-111:ac_nuovo"]
 
 
 async def test_calendar_command_without_composio_key_says_so(svc):
@@ -291,7 +291,7 @@ async def test_calendar_command_reports_composio_errors(tmp_path, root):
     from helpers import FakeComposio
 
     composio = FakeComposio()
-    composio.toolkits.authorize = lambda **kw: (_ for _ in ()).throw(ConnectionError("giù"))
+    composio.connected_accounts.link = lambda *a, **kw: (_ for _ in ()).throw(ConnectionError("giù"))
     svc = Service(tmp_path / "data", "chiave-di-test", root, composio_factory=lambda key: composio)
     svc.settings.update({"composio_api_key": "ak_test"})
     svc.users.add(111, "Mario")

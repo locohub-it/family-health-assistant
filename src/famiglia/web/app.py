@@ -464,7 +464,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         try:
             link = await service.calendar.connect_link(user)
         except CalendarError as exc:
-            flash(request, "error", exc.user_message)
+            flash(request, "error", error_text(exc))
             return back("/utenti")
         return page(request, "collega.html", active="utenti", target=user, link=link, qr=qr_svg(link))
 
@@ -475,7 +475,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         try:
             calendars = await service.calendar.list_calendars(user)
         except CalendarError as exc:
-            flash(request, "error", exc.user_message)
+            flash(request, "error", error_text(exc))
             return back("/utenti")
         return page(request, "calendario.html", active="utenti", target=user, calendars=calendars)
 
@@ -487,7 +487,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         try:
             valid = {c.id for c in await service.calendar.list_calendars(user)}
         except CalendarError as exc:
-            flash(request, "error", exc.user_message)
+            flash(request, "error", error_text(exc))
             return back("/utenti")
         if chosen not in valid:
             flash(request, "error", "Calendario non valido")

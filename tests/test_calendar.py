@@ -106,11 +106,45 @@ async def test_without_composio_key_calendar_is_disabled(make):
         await svc.calendar.connect_link(svc.mario)
 
 
+async def test_connect_link_creates_the_composio_managed_auth_config_when_the_project_has_none(make):
+    svc = make(FakeComposio())
+    await svc.calendar.connect_link(svc.mario)
+    assert svc.composio.created_configs == [("googlecalendar", {"type": "use_composio_managed_auth"})]
+
+
+async def test_connect_link_reuses_the_newest_existing_auth_config(make):
+    svc = make(FakeComposio())
+    svc.composio.auth_config_ids = ["ac_vecchia", "ac_recente"]
+    await svc.calendar.connect_link(svc.mario)
+    assert svc.composio.authorized == ["famiglia-111:ac_recente"] and svc.composio.created_configs == []
+
+
+async def test_connect_link_does_not_use_the_retired_authorize_call(make):
+    svc = make(FakeComposio())
+    assert not hasattr(svc.composio, "toolkits")  # l'SDK vero la solleva per i collegamenti Google gestiti da Composio
+    assert await svc.calendar.connect_link(svc.mario) == "https://connect.composio.dev/link/ln_abc"
+
+
+async def test_connect_link_for_an_already_connected_user_says_so(make):
+    class ComposioMultipleConnectedAccountsError(Exception):
+        pass
+
+    svc = make(FakeComposio())
+
+    def refuse(*args, **kwargs):
+        raise ComposioMultipleConnectedAccountsError("Multiple connected accounts found for user famiglia-111")
+
+    svc.composio.connected_accounts.link = refuse
+    with pytest.raises(CalendarError) as exc:
+        await svc.calendar.connect_link(svc.mario)
+    assert "già collegato" in exc.value.user_message
+
+
 async def test_connect_link_and_connected_users(make):
     svc = make(FakeComposio(connected={"famiglia-111"}))
     anna = svc.users.add(222, "Anna")
     assert await svc.calendar.connect_link(anna) == "https://connect.composio.dev/link/ln_abc"
-    assert svc.composio.authorized == ["famiglia-222:googlecalendar"]
+    assert svc.composio.authorized == ["famiglia-222:ac_nuovo"]
     assert await svc.calendar.connected_user_ids([svc.mario, anna]) == {"famiglia-111"}
     assert svc.composio.list_calls[0]["toolkit_slugs"] == ["googlecalendar"]
 
@@ -228,7 +262,7 @@ async def test_a_403_permission_error_gets_the_same_clear_message(make):
     class Forbidden(Exception):
         status_code = 403
 
-    composio.toolkits.authorize = lambda **kw: (_ for _ in ()).throw(Forbidden("no"))
+    composio.connected_accounts.link = lambda *a, **kw: (_ for _ in ()).throw(Forbidden("no"))
     svc = make(composio)
     with pytest.raises(CalendarError) as exc:
         await svc.calendar.connect_link(svc.mario)
