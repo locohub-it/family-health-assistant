@@ -51,11 +51,11 @@ def test_post_without_csrf_is_forbidden(client):
 
 def test_save_keys_and_blank_secret_is_kept(client, service):
     token = login(client)
-    client.post("/api", data={"csrf": token, "gemini_api_key": "AIza-1", "bot_token": "1:abc", "gemini_model": "gemini-2.5-flash"})
-    client.post("/api", data={"csrf": token, "gemini_api_key": "", "bot_token": "", "gemini_model": "gemini-2.5-pro"})
+    client.post("/api", data={"csrf": token, "gemini_api_key": "AIza-1", "bot_token": "1:abc", "gemini_model": "gemini-3.8-flash"})
+    client.post("/api", data={"csrf": token, "gemini_api_key": "", "bot_token": "", "gemini_model": "gemini-3.1-pro-preview"})
     assert service.settings.get("gemini_api_key") == "AIza-1"
     assert service.settings.get("bot_token") == "1:abc"
-    assert service.settings.get("gemini_model") == "gemini-2.5-pro"
+    assert service.settings.get("gemini_model") == "gemini-3.1-pro-preview"
 
 
 def test_secrets_are_never_rendered(client, service):

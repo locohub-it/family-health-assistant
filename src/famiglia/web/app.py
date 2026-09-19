@@ -6,7 +6,6 @@ import asyncio
 import secrets
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
@@ -14,10 +13,9 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from ..auth import set_password, verify_password
+from ..clock import TIMEZONE
 from ..service import Service
 from ..storage import StorageError
-
-TIMEZONE = ZoneInfo("Europe/Rome")
 
 
 class LoginRequired(Exception):
@@ -152,7 +150,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             secret_field(form, key, values)
         model = form.get("gemini_model", "").strip()
         if not model or len(model) > 80 or " " in model:
-            flash(request, "error", "Modello Gemini: inserisci un nome valido, ad esempio gemini-2.5-flash")
+            flash(request, "error", "Modello Gemini: inserisci un nome valido, ad esempio gemini-3.8-flash")
             return back("/api")
         values["gemini_model"] = model
         settings.update(values)

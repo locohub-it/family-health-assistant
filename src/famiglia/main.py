@@ -15,6 +15,9 @@ from .web.app import create_app
 
 async def run() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx a livello INFO scrive l'URL di ogni richiesta, e quello di Telegram contiene il token del bot.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     secret_key = os.environ.get("SECRET_KEY", "")
     service = Service(os.environ.get("DATA_DIR", "data"), secret_key, os.environ.get("STORAGE_ROOT", "/storage"))
     bootstrap_password(service.settings, os.environ.get("ADMIN_PASSWORD", ""))
@@ -28,7 +31,12 @@ async def run() -> None:
     server = uvicorn.Server(
         uvicorn.Config(app, host=os.environ.get("LISTEN_HOST", "0.0.0.0"), port=int(os.environ.get("LISTEN_PORT", "8080")))
     )
-    await server.serve()
+    bot_task = asyncio.create_task(service.bot.run())
+    try:
+        await server.serve()
+    finally:
+        bot_task.cancel()
+        await asyncio.gather(bot_task, return_exceptions=True)
 
 
 def main() -> None:

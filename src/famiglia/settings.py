@@ -15,7 +15,7 @@ DEFAULTS: dict[str, str] = {
     "bot_token": "",
     # Gemini
     "gemini_api_key": "",
-    "gemini_model": "gemini-2.5-flash",
+    "gemini_model": "gemini-3.8-flash",
     # Composio (Google Calendar)
     "composio_api_key": "",
     # Dove salvare le foto dei documenti, relativo alla radice montata in /storage ("." = la radice)

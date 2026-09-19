@@ -13,9 +13,11 @@ che l'utente scriva nulla.
 Tutto si configura da una **pagina web**: chiavi API, utenti (con il loro calendario) e cartella
 in cui salvare i documenti.
 
-> **Stato: in sviluppo.** Pronto: pannello di configurazione (chiavi, utenti, selettore della
-> cartella). In arrivo: lettura dei documenti con Gemini, bot Telegram, Google Calendar tramite
-> Composio, consultazione.
+> **Stato: in sviluppo.**
+> Pronto: pannello di configurazione, bot Telegram che legge foto e PDF con Gemini, salva referti,
+> appuntamenti, ricette e altri documenti (con «Annulla»). Testato con Gemini e Telegram simulati:
+> la prima prova con le chiavi vere è da fare.
+> In arrivo: Google Calendar tramite Composio e la modalità consultazione (domande e vocali).
 
 ## Come funziona
 

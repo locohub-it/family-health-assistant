@@ -99,6 +99,18 @@ class Storage:
         return self.relative(target)
 
 
+    def delete(self, relative: str) -> None:
+        """Toglie un file salvato in precedenza; se non c'è più non è un errore."""
+        if not relative:
+            return
+        target = self.resolve(relative)
+        if target.is_file():
+            try:
+                target.unlink()
+            except OSError as exc:
+                raise StorageError(f"Non riesco a cancellare il file: {exc.strerror or exc}") from exc
+
+
 def _safe_part(name: str) -> str:
     cleaned = FORBIDDEN_NAME.sub("_", name).strip().strip(".")
     if not cleaned:

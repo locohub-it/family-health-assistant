@@ -1,0 +1,197 @@
+"""Bot Telegram in long polling: nessuna porta aperta, risponde subito e solo agli utenti approvati."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Callable
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatAction, ChatType
+from telegram.error import InvalidToken, NetworkError, TelegramError
+from telegram.ext import (
+    Application,
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    TypeHandler,
+    filters,
+)
+
+from .documents import MAX_BYTES, SUPPORTED_MIME, DocumentService
+from .gemini import GeminiError
+from .settings import Settings
+from .storage import StorageError
+from .users import User, UserStore
+
+log = logging.getLogger(__name__)
+
+RETRY_SECONDS = 30
+ACK_TEXT = "📄 Sto leggendo il documento, un attimo…"
+UNDO_PREFIX = "annulla:"
+
+
+def _scrub(text: str, token: str) -> str:
+    """Il token del bot non deve finire in pagina né nei log."""
+    return text.replace(token, "***") if token else text
+
+
+class BotRunner:
+    """Tiene acceso il bot e lo riavvia quando dal pannello cambia il token."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        users: UserStore,
+        documents: DocumentService,
+        record: Callable[[str, str], None],
+    ) -> None:
+        self._settings = settings
+        self._users = users
+        self._documents = documents
+        self._record = record
+        self._changed = asyncio.Event()
+        self.status = "non avviato"
+
+    def _note(self, kind: str, text: str) -> None:
+        self._record(kind, _scrub(text, self._settings.get("bot_token")))
+
+    def restart(self) -> None:
+        self._changed.set()
+
+    async def run(self) -> None:
+        while True:
+            self._changed.clear()
+            token = self._settings.get("bot_token")
+            if not token:
+                self.status = "token del bot mancante"
+                await self._changed.wait()
+                continue
+            try:
+                await self._serve(token)
+            except InvalidToken:
+                self.status = "errore: token del bot non valido"
+                self._record("errore", "Token del bot non valido")
+                await self._changed.wait()
+            except Exception as exc:  # rete assente all'avvio, Telegram irraggiungibile...
+                reason = _scrub(str(exc), token)
+                self.status = f"errore: {reason}"
+                self._record("errore", f"Bot Telegram: {reason}")
+                log.warning("Bot Telegram fermo, riprovo tra %s s: %s", RETRY_SECONDS, reason)
+                try:
+                    await asyncio.wait_for(self._changed.wait(), RETRY_SECONDS)
+                except asyncio.TimeoutError:
+                    pass
+
+    async def _serve(self, token: str) -> None:
+        app = Application.builder().token(token).concurrent_updates(True).build()
+        self._register(app)
+        await app.initialize()  # verifica il token con Telegram
+        try:
+            await app.start()
+            await app.updater.start_polling(allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY])
+            self.status = f"in ascolto come @{app.bot.username}"
+            log.info("Bot Telegram %s", self.status)
+            await self._changed.wait()
+        finally:
+            for stop in (app.updater.stop, app.stop, app.shutdown):
+                try:
+                    await stop()
+                except Exception:  # noqa: BLE001 - in chiusura conta solo arrivare in fondo
+                    log.debug("Errore in chiusura del bot", exc_info=True)
+
+    def _register(self, app: Application) -> None:
+        # Il cancello sta nel gruppo -1: se non passa, nessun altro handler vede l'aggiornamento.
+        app.add_handler(TypeHandler(Update, self._gate), group=-1)
+        app.add_handler(CommandHandler("start", self._start))
+        app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._document))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._text))
+        app.add_handler(CallbackQueryHandler(self._undo, pattern=f"^{UNDO_PREFIX}"))
+        app.add_error_handler(self._error)
+
+    # --- Sicurezza ---------------------------------------------------------------
+
+    async def _gate(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Solo chat private con utenti approvati; tutto il resto viene ignorato in silenzio."""
+        user, chat = update.effective_user, update.effective_chat
+        if user is None or chat is None or chat.type != ChatType.PRIVATE or self._users.by_telegram_id(user.id) is None:
+            raise ApplicationHandlerStop
+
+    def _approved(self, update: Update) -> User | None:
+        return self._users.by_telegram_id(update.effective_user.id) if update.effective_user else None
+
+    # --- Handler -----------------------------------------------------------------
+
+    async def _start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = self._approved(update)
+        if user:
+            await update.effective_message.reply_text(
+                f"Ciao {user.name}! Mandami la foto di un referto, di una ricetta o di una prenotazione "
+                "e ci penso io: non devi scrivere niente."
+            )
+
+    async def _text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.effective_message.reply_text(
+            "Mandami la foto di un referto, di una ricetta o di una prenotazione e ci penso io."
+        )
+
+    async def _document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user, message = self._approved(update), update.effective_message
+        if user is None or message is None:
+            return
+        if message.photo:
+            attachment, mime = message.photo[-1], "image/jpeg"  # l'ultima è la versione più grande
+        else:
+            attachment, mime = message.document, (message.document.mime_type or "")
+        if mime not in SUPPORTED_MIME:
+            await message.reply_text("Questo tipo di file non lo so leggere. Mandami una foto o un PDF del documento.")
+            return
+        if attachment.file_size and attachment.file_size > MAX_BYTES:
+            await message.reply_text("Il file è troppo grande. Prova con una foto più leggera.")
+            return
+
+        await message.chat.send_action(ChatAction.TYPING)
+        ack = await message.reply_text(ACK_TEXT)  # risposta immediata, poi la si sostituisce col risultato
+        markup = None
+        try:
+            file = await attachment.get_file()
+            data = bytes(await file.download_as_bytearray())
+            outcome = await self._documents.process(user, data, mime)
+            text = outcome.text
+            if outcome.document_id:
+                markup = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("↩️ Annulla", callback_data=f"{UNDO_PREFIX}{outcome.document_id}")]]
+                )
+        except GeminiError as exc:
+            text = exc.user_message
+            self._note("errore", f"Gemini: {exc}")
+        except StorageError as exc:
+            text = "Non riesco a salvare il documento nella cartella scelta. Avvisa chi gestisce il bot."
+            self._note("errore", f"Salvataggio: {exc}")
+        except NetworkError as exc:
+            text = "Ho un problema di connessione con Telegram. Riprova tra poco."
+            self._note("errore", f"Rete: {exc}")
+        except Exception as exc:  # noqa: BLE001 - l'utente deve sempre ricevere una risposta
+            log.exception("Errore imprevisto con un documento")
+            text = "Qualcosa è andato storto. Riprova tra poco."
+            self._note("errore", f"Imprevisto: {exc!r}")
+        await ack.edit_text(text, reply_markup=markup)
+
+    async def _undo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query, user = update.callback_query, self._approved(update)
+        if query is None or user is None:
+            return
+        await query.answer()
+        try:
+            document_id = int(query.data.removeprefix(UNDO_PREFIX))
+        except ValueError:
+            return
+        await query.edit_message_text(await self._documents.undo(user, document_id))
+
+    async def _error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if isinstance(context.error, TelegramError):
+            log.warning("Errore Telegram: %s", context.error)
+        else:
+            log.error("Errore nel bot", exc_info=context.error)

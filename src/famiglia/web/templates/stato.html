@@ -12,6 +12,10 @@
 
 <div class="grid">
   <div class="card">
+    <h2>Bot Telegram</h2>
+    <p><span class="badge {{ 'ok' if service.bot.status.startswith('in ascolto') else 'error' if service.bot.status.startswith('errore') }}">{{ service.bot.status }}</span></p>
+  </div>
+  <div class="card">
     <h2>Utenti approvati</h2>
     {% if users %}
     <ul>{% for u in users %}<li>{{ u.name }}{% if u.role %} <span class="hint">({{ u.role }})</span>{% endif %}</li>{% endfor %}</ul>
