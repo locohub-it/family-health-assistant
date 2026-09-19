@@ -8,6 +8,7 @@ from typing import Callable
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from .ai import PROVIDERS, ROLES
 from .db import Database
 
 DEFAULTS: dict[str, str] = {
@@ -18,8 +19,6 @@ DEFAULTS: dict[str, str] = {
     "gemini_model": "gemini-3.8-flash",
     # Se il modello principale ha finito la quota o non risponde, si prova questo (vuoto = nessuno)
     "gemini_fallback_model": "gemini-3.5-flash-lite",
-    # Se la ricerca web di Google ha finito la quota, le risposte usano solo i dati salvati ("0" = mai la ricerca web)
-    "consult_web_search": "1",
     # Intelligenza artificiale per funzione: provider (gemini, groq, deepseek, custom) e modello
     "ai_docs_provider": "gemini",
     "ai_docs_model": "",
@@ -47,7 +46,6 @@ BOT_KEYS = {"bot_token"}
 
 REQUIRED_FOR_RUN = {
     "bot_token": "Token del bot Telegram",
-    "gemini_api_key": "Chiave API Gemini",
 }
 
 
@@ -103,4 +101,17 @@ class Settings:
         self._listeners.append(listener)
 
     def missing_for_run(self) -> list[str]:
-        return [label for key, label in REQUIRED_FOR_RUN.items() if not self.is_set(key)]
+        """Cosa manca per partire: il token e la chiave di ogni servizio AI effettivamente scelto."""
+        missing = [label for key, label in REQUIRED_FOR_RUN.items() if not self.is_set(key)]
+        seen: set[str] = set()
+        for role in ROLES:
+            provider = self.get(f"ai_{role}_provider")
+            provider = provider if provider in PROVIDERS else "gemini"
+            if provider in seen:
+                continue
+            seen.add(provider)
+            if not self.is_set(f"{provider}_api_key"):
+                missing.append(f"Chiave di {PROVIDERS[provider]['label']}")
+            if provider == "custom" and not self.is_set("custom_base_url"):
+                missing.append("Indirizzo del servizio compatibile OpenAI")
+        return missing

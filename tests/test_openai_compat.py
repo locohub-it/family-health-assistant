@@ -317,3 +317,11 @@ async def test_429_within_the_limit_is_an_ordinary_wait(api):
     answers = iter([error(429, "Rate limit reached on TPM: Limit 8000, Used 7600, Requested 900. Please try again in 3s.", {"retry-after": "3"}), completion("Ecco.")])
     client, _, slept = api(lambda r: next(answers))
     assert await client.answer(GROQ, "", "Mario", "?") == "Ecco." and slept == [4.0]
+
+
+async def test_the_model_list_has_a_short_timeout_but_normal_requests_do_not(api):
+    client, seen, _ = api(lambda r: httpx.Response(200, json={"data": [{"id": "a"}]}) if r.url.path.endswith("/models") else completion("ok"))
+    await client.list_models(GROQ)
+    await client.answer(GROQ, "", "Mario", "?")
+    assert seen[0].extensions["timeout"]["read"] == 20
+    assert seen[1].extensions["timeout"]["read"] != 20  # le richieste vere usano il tempo normale

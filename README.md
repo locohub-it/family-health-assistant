@@ -26,12 +26,14 @@ foto ─> bot Telegram (long polling) ─> solo ID approvati ─> Gemini decide 
                                                               ├─ prenotazione ─> DB + Google Calendar (Composio)
                                                               ├─ referto      ─> DB + foto nella cartella scelta
                                                               └─ ricetta/altro ─> DB + foto
-domanda ─> dati della persona dal DB ─> Gemini (con ricerca web) ─> risposta in italiano
+domanda ─> dati della persona dal DB ─> modello AI scelto (Gemini, Groq…) ─> risposta in italiano
 ```
 
 - **Domande**: un messaggio scritto o un vocale è una domanda. Gemini riceve lo storico di chi scrive
   (e dei familiari per cui ha inviato documenti, non degli altri) e risponde in italiano semplice,
-  con la ricerca web di Google per spiegare i valori. Spiega e rimanda al medico: non fa diagnosi.
+  distinguendo ciò che legge nei documenti dalle spiegazioni generali («In generale…»). Il bot **non
+  cerca sul web** e non conosce la posizione di nessuno: a «l'oculista più vicino» risponde che non può
+  e suggerisce il medico di base. Spiega e rimanda al medico: non fa diagnosi.
 - Il bot parla con Telegram in **long polling**: risponde subito e **non serve aprire nessuna porta**.
   Composio non viene usato per Telegram: il suo toolkit non ha trigger per i messaggi in arrivo né
   un modo per scaricare le foto. Viene usato per Google Calendar, dove serve.
@@ -53,7 +55,8 @@ la sua sede. Controlla le condizioni prima di usare dati sanitari veri; un servi
 ## Cosa serve
 
 1. **Bot Telegram**: crealo con @BotFather (`/newbot`) e copia il token.
-2. **Chiave Gemini** da <https://aistudio.google.com/apikey>.
+2. **Chiave di un servizio AI**: Gemini da <https://aistudio.google.com/apikey>, oppure Groq, DeepSeek o
+   un servizio compatibile OpenAI.
 3. **Chiave Composio** (per Google Calendar): la **Project API key** (`ak_…`) da <https://platform.composio.dev>,
    nelle impostazioni del progetto. Non la chiave `ck_…` (consumer, per MCP): il pannello la rifiuta. Ogni persona
    collega il proprio account Google dal pannello.
@@ -88,23 +91,19 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
 
 ## Primo avvio dal pannello
 
-1. **Chiavi API**: token del bot, chiave Gemini, chiave Composio. Il pulsante **Prova Gemini** fa tre
-   piccole richieste (modello principale, di riserva, ricerca web) e mostra per ciascuna l'esito e, se
-   fallisce, la quota esatta che Google indica. Sul piano gratuito Gemini ha
-   limiti di richieste per modello: il **modello di riserva** entra in azione da solo quando quello
-   principale ha finito le richieste o non risponde, e il bot aspetta e riprova se il limite è al minuto (e non aspetta invano se la quota è finita).
-   La ricerca web di Google nelle risposte ha una quota sua: se è finita, il bot risponde con i dati
-   salvati e lo dice; si può anche disattivare.
-   **Modelli IA** (facoltativo): Gemini è il predefinito, ma per ogni funzione (lettura dei documenti,
-   domande) si può scegliere un altro servizio: **Groq**, **DeepSeek** o uno qualsiasi compatibile
-   OpenAI (OpenRouter, Ollama sul tuo server…). Inserisci la chiave e premi «Salva e cerca i modelli»:
-   il pannello chiede al servizio i modelli disponibili e sceglie da solo quello adatto (si può
-   cambiare dal menu o scrivere il nome a mano). «Prova» verifica che il modello risponda e, per i
-   documenti, che accetti le immagini. Con Groq i vocali si trascrivono con Whisper; la ricerca web di
-   Google nelle risposte esiste solo con Gemini. I PDF con testo si leggono con qualsiasi modello.
-   Con i servizi dai limiti di token bassi (il piano gratuito di Groq ammette circa 8.000 token al
-   minuto) a ogni domanda si inviano solo i documenti più recenti, entro un tetto regolabile
-   (`Dati inviati a ogni domanda`); con Gemini il tetto è molto più alto.
+1. **Chiavi API**: token del bot Telegram e chiave Composio.
+   **Modelli IA**: le chiavi dei servizi AI e la scelta del modello per ogni funzione (lettura dei
+   documenti, domande). Gemini è il predefinito; in alternativa **Groq**, **DeepSeek** o uno
+   qualsiasi compatibile OpenAI (OpenRouter, Ollama sul tuo server…). Inserita la chiave, basta
+   scegliere il servizio: la lista dei modelli si carica da sola (con una finestra di attesa se
+   serve) e il pannello sceglie quello adatto; si può cambiare dal menu o scrivere il nome a mano.
+   Per i documenti prova i modelli con un'immagine e tiene il primo che la legge. **Prova** verifica
+   un modello; **Prova Gemini** mostra l'esito del modello principale e di quello di riserva, con la
+   quota esatta se falliscono. Con Gemini il **modello di riserva** entra in azione da solo se quello
+   principale ha finito le richieste; il bot aspetta e riprova se il limite è al minuto (e non aspetta
+   invano se la quota è finita). Con Groq i vocali si trascrivono con Whisper, i PDF con testo si
+   leggono con qualsiasi modello, e con i limiti di token bassi (il piano gratuito ammette circa 8.000
+   token al minuto) a ogni domanda si inviano solo i documenti più recenti, entro un tetto regolabile.
 2. **Cartella** (facoltativo): senza scegliere niente il bot salva in `Documenti`, dentro
    `STORAGE_ROOT`, e la crea da solo. Per cambiarla, sfoglia dentro `STORAGE_ROOT`, crea una
    cartella se serve e scegli «Usa questa cartella» (il pannello controlla che si possa

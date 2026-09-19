@@ -272,37 +272,23 @@ def has_tools(request: httpx.Request) -> bool:
     return bool(json.loads(request.content).get("tools"))
 
 
-async def test_answer_uses_web_search_when_it_works(gemini):
-    client, seen = gemini(lambda r: httpx.Response(200, json=candidate("Risposta con web.")))
-    assert await client.answer("## Mario", "Mario", question="Ciao?") == "Risposta con web."
-    assert has_tools(seen[0]) and len(seen) == 1
+async def test_answer_never_sends_a_search_tool(gemini):
+    client, seen = gemini(lambda r: httpx.Response(200, json=candidate("Risposta.")))
+    assert await client.answer("## Mario", "Mario", question="Ciao?") == "Risposta."
+    assert not has_tools(seen[0]) and "googleSearch" not in seen[0].content.decode() and len(seen) == 1
 
 
-async def test_when_the_web_search_quota_is_over_the_answer_uses_the_saved_data_only(gemini):
-    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA) if has_tools(r) else httpx.Response(200, json=candidate("Dai dati salvati.")))
-    answer = await client.answer("## Mario", "Mario", question="Come va?")
-    assert answer.startswith("Dai dati salvati.") and "non riesco a cercare sul web" in answer
-    assert "«in generale»" in answer and "meno aggiornate" in answer
-    assert [has_tools(r) for r in seen] == [True, True, False]  # con web su entrambi i modelli, poi senza web
-    assert any("Ricerca web non disponibile" in r["detail"] for r in client.service.recent_activity(10))
-
-
-async def test_web_search_can_be_switched_off_from_the_panel(gemini):
-    client, seen = gemini(lambda r: httpx.Response(200, json=candidate("Senza web.")))
-    client._settings.update({"consult_web_search": "0"})
-    assert await client.answer("## Mario", "Mario", question="Ciao?") == "Senza web."
-    assert not has_tools(seen[0])
-
-
-async def test_if_even_the_answer_without_web_search_is_over_quota_it_gives_up(gemini):
+async def test_a_question_over_quota_tries_the_fallback_model_then_gives_a_clear_message(gemini):
+    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA) if model_of(r) == "gemini-test-flash" else ok("Dalla riserva."))
+    assert await client.answer("## Mario", "Mario", question="Come va?") == "Dalla riserva."
+    assert [model_of(r) for r in seen] == ["gemini-test-flash", "gemini-test-lite"]
     client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA))
     with pytest.raises(GeminiError) as exc:
         await client.answer("## Mario", "Mario", question="Come va?")
-    assert "richieste gratuite" in exc.value.user_message
-    assert [has_tools(r) for r in seen] == [True, True, False, False]  # nessun ciclo infinito
+    assert "richieste gratuite" in exc.value.user_message and len(seen) == 2  # niente cicli: un tentativo per modello
 
 
-async def test_a_bad_key_does_not_trigger_the_web_search_fallback(gemini):
+async def test_a_bad_key_stops_a_question_at_once(gemini):
     client, seen = gemini(lambda r: httpx.Response(403, json={"error": {"code": 403, "message": "no", "status": "PERMISSION_DENIED"}}))
     with pytest.raises(GeminiError, match="403"):
         await client.answer("## Mario", "Mario", question="Come va?")
@@ -312,16 +298,15 @@ async def test_a_bad_key_does_not_trigger_the_web_search_fallback(gemini):
 # --- Prova dal pannello ---------------------------------------------------------
 
 
-async def test_check_reports_each_model_and_the_web_search_separately(gemini):
-    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA) if has_tools(r) else httpx.Response(200, json=candidate("ok")))
+async def test_check_reports_the_main_and_the_reserve_model_separately(gemini):
+    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA) if model_of(r) == "gemini-test-lite" else httpx.Response(200, json=candidate("ok")))
     results = await client.check()
     assert [(label, ok) for label, ok, _ in results] == [
         ("Modello principale (gemini-test-flash)", True),
-        ("Modello di riserva (gemini-test-lite)", True),
-        ("Ricerca web con gemini-test-flash", False),
+        ("Modello di riserva (gemini-test-lite)", False),
     ]
-    assert "exceeded your current quota" in results[2][2] and "429" in results[2][2]
-    assert client.slept == []  # è una prova: nessuna attesa né nuovi tentativi
+    assert "exceeded your current quota" in results[1][2] and "429" in results[1][2]
+    assert client.slept == [] and not any(has_tools(r) for r in seen)  # è una prova: nessuna attesa, nessuna ricerca web
 
 
 async def test_check_with_a_missing_model_shows_the_404(gemini):

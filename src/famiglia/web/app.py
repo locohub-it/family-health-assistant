@@ -179,7 +179,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
     async def api_save(request: Request) -> Response:
         form = await checked_form(request)
         values: dict[str, str] = {}
-        for key in ("bot_token", "gemini_api_key", "composio_api_key"):
+        for key in ("bot_token", "composio_api_key"):
             secret_field(form, key, values)
         if values.get("composio_api_key", "").startswith("ck_"):
             flash(
@@ -189,32 +189,8 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
                 "Project API key: su platform.composio.dev, nelle impostazioni del progetto, chiave che inizia con ak_.",
             )
             return back("/api")
-        model = form.get("gemini_model", "").strip()
-        if not model or len(model) > 80 or " " in model:
-            flash(request, "error", "Modello Gemini: inserisci un nome valido, ad esempio gemini-3.8-flash")
-            return back("/api")
-        values["gemini_model"] = model
-        fallback = form.get("gemini_fallback_model", "").strip()
-        if len(fallback) > 80 or " " in fallback:
-            flash(request, "error", "Modello di riserva: inserisci un nome valido oppure lascia vuoto")
-            return back("/api")
-        values["gemini_fallback_model"] = fallback
-        values["consult_web_search"] = "1" if form.get("consult_web_search") else "0"
         settings.update(values)
         flash(request, "ok", "Chiavi salvate")
-        return back("/api")
-
-    @app.post("/api/prova")
-    async def api_probe(request: Request) -> Response:
-        """Tre piccole richieste vere: dicono cosa funziona di Gemini e, se no, il motivo esatto."""
-        await checked_form(request)
-        try:
-            results = await service.gemini.check()
-        except GeminiError as exc:
-            flash(request, "error", exc.user_message)
-            return back("/api")
-        for label, ok, detail in results:
-            flash(request, "ok" if ok else "error", f"{label}: {'funziona' if ok else detail}")
         return back("/api")
 
     # --- Modelli IA --------------------------------------------------------------
@@ -225,15 +201,29 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         for role in ROLES:
             provider, model = service.ai.provider(role), service.ai.model(role)
             current[role] = {"provider": provider, "model": model, "models": service.ai.cached_models(provider)}
-        return page(request, "ia.html", active="ia", roles=ROLES, providers=PROVIDERS, current=current)
+        return page(
+            request,
+            "ia.html",
+            active="ia",
+            roles=ROLES,
+            providers=PROVIDERS,
+            current=current,
+            gemini_models=service.ai.cached_models("gemini"),
+        )
 
     @app.post("/ia")
     async def ai_save(request: Request) -> Response:
         """Salva chiavi e scelte, poi cerca da solo i modelli disponibili e sceglie dove manca."""
         form = await checked_form(request)
         values: dict[str, str] = {}
-        for key in ("groq_api_key", "deepseek_api_key", "custom_api_key"):
+        for key in ("gemini_api_key", "groq_api_key", "deepseek_api_key", "custom_api_key"):
             secret_field(form, key, values)
+        gemini_model = form.get("gemini_model", "").strip() or settings.get("gemini_model")
+        gemini_fallback = form.get("gemini_fallback_model", "").strip()
+        if not MODEL_NAME.match(gemini_model) or (gemini_fallback and not MODEL_NAME.match(gemini_fallback)):
+            flash(request, "error", "Modello Gemini: inserisci un nome valido, ad esempio gemini-3.8-flash")
+            return back("/ia")
+        values["gemini_model"], values["gemini_fallback_model"] = gemini_model, gemini_fallback
         base_url = form.get("custom_base_url", "").strip().rstrip("/")
         if base_url and not BASE_URL.match(base_url):
             flash(request, "error", "L'indirizzo del servizio deve iniziare con http:// o https://")
@@ -262,7 +252,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             values[f"ai_{role}_provider"], values[f"ai_{role}_model"] = provider, model
         settings.update(values)
         for text, ok in await service.ai.refresh_and_pick():
-            flash(request, "ok" if ok else "error", text)
+            flash(request, "info" if ok is None else ("ok" if ok else "error"), text)
         return back("/ia")
 
     @app.post("/ia/auto")
@@ -270,7 +260,20 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
         """Scelta automatica da capo: utile se un modello scelto prima non legge le immagini."""
         await checked_form(request)
         for text, ok in await service.ai.repick():
-            flash(request, "ok" if ok else "error", text)
+            flash(request, "info" if ok is None else ("ok" if ok else "error"), text)
+        return back("/ia")
+
+    @app.post("/ia/prova-gemini")
+    async def ai_probe_gemini(request: Request) -> Response:
+        """Prova del modello principale e di quello di riserva di Gemini, con il motivo esatto se falliscono."""
+        await checked_form(request)
+        try:
+            results = await service.gemini.check()
+        except GeminiError as exc:
+            flash(request, "error", exc.user_message)
+            return back("/ia")
+        for label, ok, detail in results:
+            flash(request, "ok" if ok else "error", f"{label}: {'funziona' if ok else detail}")
         return back("/ia")
 
     @app.post("/ia/prova/{role}")

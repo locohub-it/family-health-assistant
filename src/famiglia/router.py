@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from .ai import PROVIDERS, ROLES, AiError, Endpoint, suggest_model, vision_candidates, whisper_model
+from .ai import PROVIDERS, ROLES, AiError, Endpoint, NotConfigured, suggest_model, vision_candidates, whisper_model
 from .gemini import Extraction, Gemini
 from .openai_compat import OpenAICompat
 from .settings import Settings
@@ -48,9 +48,9 @@ class AiRouter:
         base_url = preset["base_url"] or (self._settings.get("custom_base_url").strip() if provider == "custom" else "")
         key = self._settings.get(f"{provider}_api_key")
         if not key:
-            raise AiError(f"{preset['label']} non è configurato: manca la chiave. Avvisa chi gestisce il bot.")
+            raise NotConfigured(f"{preset['label']} non è configurato: manca la chiave. Avvisa chi gestisce il bot.")
         if not base_url:
-            raise AiError("Manca l'indirizzo del servizio compatibile OpenAI. Avvisa chi gestisce il bot.")
+            raise NotConfigured("Manca l'indirizzo del servizio compatibile OpenAI. Avvisa chi gestisce il bot.")
         return Endpoint(provider, preset["label"], base_url, key, model)
 
     def role_endpoint(self, role: str) -> Endpoint:
@@ -109,18 +109,22 @@ class AiRouter:
         self._settings.update({CACHE_KEY: json.dumps(cache)})
         return ids
 
-    async def refresh_and_pick(self) -> list[tuple[str, bool]]:
+    async def refresh_and_pick(self) -> list[tuple[str, bool | None]]:
         """Aggiorna l'elenco dei provider in uso e sceglie da solo il modello dove manca o non esiste più.
 
-        Restituisce messaggi (testo, ok) da mostrare all'admin.
+        Restituisce messaggi (testo, esito) da mostrare all'admin: True = riuscito, False = errore vero,
+        None = nota (per esempio una chiave non ancora inserita, che non è un guasto).
         """
-        messages: list[tuple[str, bool]] = []
+        messages: list[tuple[str, bool | None]] = []
         refreshed: dict[str, list[str]] = {}
         for role, label in ROLES.items():
             provider = self.provider(role)
             if provider not in refreshed:
                 try:
                     refreshed[provider] = await self.refresh_models(provider)
+                except NotConfigured:
+                    refreshed[provider] = []
+                    messages.append((f"{PROVIDERS[provider]['label']}: chiave non impostata, elenco dei modelli non caricato.", None))
                 except AiError as exc:
                     refreshed[provider] = []
                     messages.append((f"{PROVIDERS[provider]['label']}: {exc.user_message}", False))

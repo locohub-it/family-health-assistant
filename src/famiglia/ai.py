@@ -17,6 +17,10 @@ class AiError(Exception):
         self.quota = quota  # vero se il provider ha risposto 429 (troppe richieste o quota finita)
 
 
+class NotConfigured(AiError):
+    """Manca la chiave o l'indirizzo: non è un guasto, è una cosa ancora da inserire."""
+
+
 # Il provider «gemini» usa l'SDK di Google; gli altri parlano il formato compatibile OpenAI.
 PROVIDERS: dict[str, dict[str, str]] = {
     "gemini": {"label": "Google Gemini", "base_url": ""},

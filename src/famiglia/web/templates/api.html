@@ -2,6 +2,8 @@
 {% block title %}Chiavi API{% endblock %}
 {% block content %}
 <h1>Chiavi API</h1>
+<p class="hint">Le chiavi dei servizi di intelligenza artificiale (Gemini, Groq, DeepSeek…) sono nella pagina
+  <a href="/ia">Modelli IA</a>.</p>
 <form method="post" action="/api">
   <input type="hidden" name="csrf" value="{{ csrf }}">
 
@@ -10,28 +12,6 @@
     <label for="bot_token">Token del bot {% if s.is_set('bot_token') %}<span class="badge ok">impostato</span>{% endif %}</label>
     <input id="bot_token" name="bot_token" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarlo' if s.is_set('bot_token') else '123456:ABC…' }}">
     <div class="hint">Si crea con @BotFather su Telegram (/newbot).</div>
-  </div>
-
-  <div class="card">
-    <h2>Gemini</h2>
-    <label for="gemini_api_key">Chiave API {% if s.is_set('gemini_api_key') %}<span class="badge ok">impostata</span>{% endif %}</label>
-    <input id="gemini_api_key" name="gemini_api_key" type="password" autocomplete="off" placeholder="{{ 'lascia vuoto per non cambiarla' if s.is_set('gemini_api_key') else 'AIza…' }}">
-    <div class="hint">Da <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.
-      Sul piano gratuito Google può usare i contenuti inviati per migliorare i suoi prodotti: per dati sanitari
-      conviene un progetto con fatturazione attiva.</div>
-    <label for="gemini_model">Modello</label>
-    <input id="gemini_model" name="gemini_model" type="text" value="{{ s.get('gemini_model') }}" required>
-    <label for="gemini_fallback_model">Modello di riserva <span class="hint">(facoltativo)</span></label>
-    <input id="gemini_fallback_model" name="gemini_fallback_model" type="text" value="{{ s.get('gemini_fallback_model') }}">
-    <div class="hint">Con Gemini che dà «troppe richieste» puoi usare un altro servizio (Groq, DeepSeek…):
-      <a href="/ia">Modelli IA</a>.</div>
-    <label class="check"><input type="checkbox" name="consult_web_search" value="1" {{ 'checked' if s.get('consult_web_search') != '0' }}>
-      Usa la ricerca web di Google per spiegare i valori nelle risposte</label>
-    <div class="hint">Ha una quota sua: se è finita il bot risponde comunque con i dati salvati e lo dice.
-      Togli la spunta per non usarla mai.</div>
-    <div class="hint">Se il modello principale ha finito le richieste gratuite o non risponde, il bot prova questo.
-      Sul piano gratuito i limiti sono per modello, quindi un secondo modello raddoppia le richieste disponibili.
-      Lascia vuoto per non usarne uno.</div>
   </div>
 
   <div class="card">
@@ -46,13 +26,5 @@
   </div>
 
   <div class="actions"><button class="primary">Salva</button></div>
-</form>
-
-<form method="post" action="/api/prova" class="card">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <h2>Prova Gemini</h2>
-  <p class="hint">Fa tre piccole richieste vere (modello principale, di riserva e ricerca web) e mostra l'esito di ciascuna,
-    con il motivo esatto se una fallisce. Salva prima le modifiche.</p>
-  <div class="actions"><button>Prova ora</button></div>
 </form>
 {% endblock %}

@@ -15,12 +15,13 @@ from pydantic import ValidationError
 from . import clock
 from .ai import AiError, Endpoint
 from .ai import tiny_png as _tiny_png
-from .gemini import ANALYZE_INSTRUCTIONS, CONSULT_INSTRUCTIONS_NO_WEB, Extraction
+from .gemini import ANALYZE_INSTRUCTIONS, CONSULT_INSTRUCTIONS, Extraction
 
 MAX_PARALLEL_CALLS = 2
 MAX_RETRIES = 2
 MAX_WAIT_SECONDS = 45
 REQUEST_TIMEOUT = 90
+LIST_TIMEOUT = 20
 IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 JSON_RULES = (
@@ -180,12 +181,16 @@ class OpenAICompat:
             self._own = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
         return self._own
 
-    async def _send(self, endpoint: Endpoint, method: str, path: str, **kwargs) -> httpx.Response:
+    async def _send(
+        self, endpoint: Endpoint, method: str, path: str, timeout: float | None = None, **kwargs
+    ) -> httpx.Response:
         url = endpoint.base_url.rstrip("/") + path
         headers = {"Authorization": f"Bearer {endpoint.api_key}"}
         for attempt in range(MAX_RETRIES + 1):
             try:
                 async with self._slots:
+                    if timeout is not None:
+                        kwargs["timeout"] = timeout
                     response = await self._client().request(method, url, headers=headers, **kwargs)
             except (httpx.HTTPError, OSError) as exc:
                 raise AiError(
@@ -206,7 +211,8 @@ class OpenAICompat:
 
     async def list_models(self, endpoint: Endpoint) -> list[str]:
         try:
-            body = (await self._send(endpoint, "GET", "/models")).json()
+            # L'elenco è una richiesta leggera: se il servizio non risponde in poco tempo, meglio dirlo che far aspettare.
+            body = (await self._send(endpoint, "GET", "/models", timeout=LIST_TIMEOUT)).json()
         except AiError as exc:
             if "non esiste" in exc.user_message:  # 404: il servizio non pubblica l'elenco
                 raise AiError(
@@ -261,7 +267,7 @@ class OpenAICompat:
     async def answer(self, endpoint: Endpoint, context: str, sender_name: str, question: str) -> str:
         intro = f"Oggi è il {clock.now().strftime('%Y-%m-%d')}. Scrive {sender_name}.\n\nDATI DELLA FAMIGLIA:\n{context}\n\n"
         messages = [
-            {"role": "system", "content": CONSULT_INSTRUCTIONS_NO_WEB},
+            {"role": "system", "content": CONSULT_INSTRUCTIONS},
             {"role": "user", "content": intro + f"Domanda: {question}"},
         ]
         return await self._chat(endpoint, messages, temperature=0.3)

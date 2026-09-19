@@ -49,13 +49,33 @@ def test_post_without_csrf_is_forbidden(client):
     assert client.post("/utenti", data={"name": "Mario", "telegram_id": "1"}).status_code == 403
 
 
-def test_save_keys_and_blank_secret_is_kept(client, service):
+def test_save_telegram_and_composio_keys_and_blank_secret_is_kept(client, service):
     token = login(client)
-    client.post("/api", data={"csrf": token, "gemini_api_key": "AIza-1", "bot_token": "1:abc", "gemini_model": "gemini-3.8-flash"})
-    client.post("/api", data={"csrf": token, "gemini_api_key": "", "bot_token": "", "gemini_model": "gemini-3.1-pro-preview"})
-    assert service.settings.get("gemini_api_key") == "AIza-1"
-    assert service.settings.get("bot_token") == "1:abc"
-    assert service.settings.get("gemini_model") == "gemini-3.1-pro-preview"
+    client.post("/api", data={"csrf": token, "bot_token": "1:abc", "composio_api_key": "ak_uno"})
+    client.post("/api", data={"csrf": token, "bot_token": "", "composio_api_key": ""})
+    assert service.settings.get("bot_token") == "1:abc" and service.settings.get("composio_api_key") == "ak_uno"
+
+
+def test_gemini_key_and_models_are_saved_from_the_ai_page(gemini_client):
+    client, service = gemini_client
+    token = login(client)
+    base = {"csrf": token, "ai_docs_provider": "gemini", "ai_chat_provider": "gemini"}
+    response = client.post("/ia", data={**base, "gemini_api_key": "AIza-1", "gemini_model": "gemini-3.8-flash", "gemini_fallback_model": "gemini-3.5-flash-lite"})
+    assert "Gemini, modello gemini-3.8-flash (2 disponibili)" in response.text  # la lista si carica da sola al salvataggio
+    assert service.ai.cached_models("gemini") == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+    html = client.get("/ia").text
+    assert '<select id="gemini_model"' in html and '<select id="gemini_fallback_model"' in html  # ora sono menu, non caselle di testo
+    client.post("/ia", data={**base, "gemini_api_key": "", "gemini_model": "gemini-3.5-flash-lite", "gemini_fallback_model": ""})
+    assert service.settings.get("gemini_api_key") == "AIza-1"  # lasciata vuota: invariata
+    assert service.settings.get("gemini_model") == "gemini-3.5-flash-lite" and service.settings.get("gemini_fallback_model") == ""
+
+
+def test_gemini_is_no_longer_on_the_api_keys_page(client, service):
+    login(client)
+    html = client.get("/api").text
+    assert "gemini_api_key" not in html and "Modelli IA" in html and "ricerca web" not in html.lower()
+    ia = client.get("/ia").text
+    assert 'name="gemini_api_key"' in ia and 'name="gemini_model"' in ia and 'name="gemini_fallback_model"' in ia
 
 
 def test_secrets_are_never_rendered(client, service):
@@ -210,14 +230,12 @@ def test_an_unusable_chosen_folder_is_flagged_in_the_panel(client, service, root
         assert "utilizzabile" in html and "Documenti" in html
 
 
-def test_fallback_model_can_be_saved_and_emptied(client, service):
+def test_gemini_model_names_are_validated(client, service):
     token = login(client)
-    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "gemini_fallback_model": "gemini-3.5-flash-lite"})
-    assert service.settings.get("gemini_fallback_model") == "gemini-3.5-flash-lite"
-    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "gemini_fallback_model": ""})
-    assert service.settings.get("gemini_fallback_model") == ""
-    response = client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "gemini_fallback_model": "nome con spazi"})
-    assert "Modello di riserva" in response.text
+    base = {"csrf": token, "ai_docs_provider": "gemini", "ai_chat_provider": "gemini"}
+    for bad in ({"gemini_model": "nome con spazi"}, {"gemini_model": "gemini-3.8-flash", "gemini_fallback_model": "x;y z"}):
+        assert "Modello Gemini: inserisci un nome valido" in client.post("/ia", data={**base, **bad}).text
+    assert service.settings.get("gemini_model") == "gemini-3.8-flash"
 
 
 def test_connect_page_shows_link_and_qr(cal_client):
@@ -314,13 +332,13 @@ def test_edit_requires_login_and_csrf_and_a_real_user(client, service):
 # --- Prova Gemini e ricerca web ------------------------------------------------
 
 
-def test_probe_button_shows_each_result_with_the_real_reason(tmp_path, root):
+def test_gemini_probe_button_shows_each_model_with_the_real_reason(tmp_path, root):
     import httpx
 
     from famiglia.service import Service
 
     def respond(request):
-        if b"googleSearch" in request.content:
+        if "lite" in request.url.path:
             return httpx.Response(429, json={"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota"}})
         return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}]})
 
@@ -329,25 +347,26 @@ def test_probe_button_shows_each_result_with_the_real_reason(tmp_path, root):
     set_password(service.settings, PASSWORD)
     client = TestClient(create_app(service, secret_key="chiave-di-test", admin_user="admin"))
     token = login(client)
-    html = client.post("/api/prova", data={"csrf": token}).text
+    html = client.post("/ia/prova-gemini", data={"csrf": token}).text
     assert "Modello principale (gemini-3.8-flash): funziona" in html
-    assert "Modello di riserva (gemini-3.5-flash-lite): funziona" in html
-    assert "Ricerca web con gemini-3.8-flash: 429" in html and "exceeded your current quota" in html
+    assert "Modello di riserva (gemini-3.5-flash-lite): 429" in html and "exceeded your current quota" in html
+    assert "Ricerca web" not in html
 
 
-def test_probe_without_a_key_says_so_and_requires_login(client):
-    assert client.post("/api/prova", follow_redirects=False).status_code == 303
+def test_gemini_probe_without_a_key_says_so_and_requires_login_and_csrf(client):
+    assert client.post("/ia/prova-gemini", follow_redirects=False).status_code == 303
     token = login(client)
-    assert "manca la chiave Gemini" in client.post("/api/prova", data={"csrf": token}).text
+    assert client.post("/ia/prova-gemini").status_code == 403
+    assert "manca la chiave Gemini" in client.post("/ia/prova-gemini", data={"csrf": token}).text
 
 
-def test_web_search_switch_is_saved(client, service):
-    token = login(client)
-    assert 'name="consult_web_search" value="1" checked' in client.get("/api").text  # attiva di default
-    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash"})  # casella non spuntata
-    assert service.settings.get("consult_web_search") == "0"
-    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "consult_web_search": "1"})
-    assert service.settings.get("consult_web_search") == "1"
+def test_there_is_no_web_search_option_anywhere(client, service):
+    login(client)
+    for page in ("/api", "/ia", "/"):
+        assert "ricerca web" not in client.get(page).text.lower()
+    from famiglia.settings import DEFAULTS
+
+    assert "consult_web_search" not in DEFAULTS
 
 
 # --- Coordinatore --------------------------------------------------------------
@@ -399,6 +418,28 @@ def test_coordinator_route_requires_login_and_csrf(cal_client):
 
 
 # --- Modelli IA ----------------------------------------------------------------
+
+GEMINI_LIST = {"models": [
+    {"name": "models/gemini-3.5-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+    {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]},
+    {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+]}
+
+
+@pytest.fixture
+def gemini_client(tmp_path, root):
+    """Pannello con Gemini simulato: nessuna richiesta vera a Google."""
+    import httpx
+
+    from famiglia.service import Service
+
+    service = Service(
+        tmp_path / "data", "chiave-di-test", root,
+        gemini_http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=GEMINI_LIST))),
+    )
+    set_password(service.settings, PASSWORD)
+    return TestClient(create_app(service, secret_key="chiave-di-test", admin_user="admin")), service
+
 
 GROQ_LIST = {"data": [{"id": "llama-3.3-70b-versatile"}, {"id": "meta-llama/llama-4-scout-17b-16e-instruct"}, {"id": "whisper-large-v3"}, {"id": "playai-tts"}]}
 DEEPSEEK_LIST = {"data": [{"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]}
@@ -557,3 +598,53 @@ def test_context_size_field_is_saved_and_validated(ia_client):
         assert "tra 2000 e 200000" in response.text and service.settings.get("ai_context_chars") == "15000"
     client.post("/ia", data=base)  # campo assente: resta il valore attuale
     assert service.settings.get("ai_context_chars") == "15000"
+
+
+# --- Chiavi richieste secondo i servizi scelti ---------------------------------
+
+
+def test_missing_keys_follow_the_services_actually_chosen(service):
+    assert service.settings.missing_for_run() == ["Token del bot Telegram", "Chiave di Google Gemini"]
+    service.settings.update({"ai_docs_provider": "groq", "ai_chat_provider": "groq"})
+    assert service.settings.missing_for_run() == ["Token del bot Telegram", "Chiave di Groq"]  # una volta sola, e non più Gemini
+    service.settings.update({"ai_chat_provider": "custom", "groq_api_key": "gsk", "bot_token": "1:abc"})
+    assert service.settings.missing_for_run() == ["Chiave di Altro (compatibile OpenAI)", "Indirizzo del servizio compatibile OpenAI"]
+    service.settings.update({"custom_api_key": "k", "custom_base_url": "http://x/v1"})
+    assert service.settings.missing_for_run() == []
+
+
+def test_status_page_asks_for_the_key_of_the_chosen_service(client, service):
+    login(client)
+    service.settings.update({"ai_chat_provider": "deepseek"})
+    html = client.get("/").text
+    assert "Chiave di DeepSeek" in html and "Chiave di Google Gemini" in html  # i documenti sono ancora su Gemini
+
+
+# --- Caricamento automatico dei modelli e finestra con la rotella ----------------
+
+
+def test_the_ai_page_wires_the_automatic_loading_and_the_spinner(client):
+    login(client)
+    html = client.get("/ia").text
+    assert 'id="carica"' in html and 'class="spinner"' in html and 'role="status"' in html  # la finestra con la rotella
+    assert html.count('class="provider-select"') == 2  # un menu per funzione
+    for provider in ("gemini", "groq", "deepseek", "custom"):
+        assert f'data-key-field="{provider}_api_key"' in html
+    assert "requestSubmit" in html  # il cambio di servizio invia il modulo che carica i modelli
+    assert html.count("data-carica=") >= 5  # anche i salvataggi e le prove mostrano la rotella se ci mettono troppo
+
+
+def test_a_provider_with_a_saved_key_is_marked_so_the_page_can_load_at_once(ia_client):
+    client, service = ia_client
+    token = login(client)
+    assert 'data-has-key=""' in client.get("/ia").text
+    client.post("/ia", data={"csrf": token, "groq_api_key": "gsk", "ai_docs_provider": "gemini", "ai_chat_provider": "gemini"})
+    html = client.get("/ia").text
+    assert 'value="groq" data-key-field="groq_api_key" data-has-key="1"' in html
+
+
+def test_a_key_not_yet_entered_is_shown_as_a_note_not_an_error(client, service):
+    token = login(client)
+    html = client.post("/ia", data={"csrf": token, "ai_docs_provider": "groq", "ai_chat_provider": "groq"}).text
+    assert "Groq: chiave non impostata, elenco dei modelli non caricato." in html
+    assert 'class="flash info"' in html and 'class="flash error">Groq' not in html

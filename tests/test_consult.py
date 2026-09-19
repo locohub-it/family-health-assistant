@@ -141,12 +141,12 @@ def gemini(tmp_path, root):
     return _make
 
 
-async def test_gemini_answer_uses_web_search_and_the_family_data(gemini):
+async def test_gemini_answer_sends_the_family_data_and_the_rules_without_any_tool(gemini):
     client, seen = gemini("  Ecco la risposta.  ")
     answer = await client.answer("## Mario\n- 25/10/2025: Glicemia 95", "Mario Rossi", question="Come va la glicemia?")
     assert answer == "Ecco la risposta."
     body = seen[0]
-    assert any("googleSearch" in tool for tool in body["tools"])
+    assert "tools" not in body
     assert "responseMimeType" not in body.get("generationConfig", {}) and "responseSchema" not in body.get("generationConfig", {})
     text = body["contents"][0]["parts"][0]["text"]
     assert "Scrive Mario Rossi" in text and "Glicemia 95" in text and "Come va la glicemia?" in text
@@ -200,11 +200,12 @@ async def test_the_instructions_separate_saved_data_from_general_explanations(ge
     assert "In generale" in system and "citando la data del documento" in system
 
 
-def test_the_no_web_variant_keeps_the_same_rule_but_drops_the_web_search():
-    from famiglia.gemini import CONSULT_INSTRUCTIONS, CONSULT_INSTRUCTIONS_NO_WEB
+def test_the_instructions_say_there_is_no_web_and_how_to_answer_search_requests():
+    from famiglia.gemini import CONSULT_INSTRUCTIONS
 
-    assert "In generale" in CONSULT_INSTRUCTIONS_NO_WEB
-    assert "ricerca web" in CONSULT_INSTRUCTIONS and "ricerca web" not in CONSULT_INSTRUCTIONS_NO_WEB
+    assert "Non hai accesso al web" in CONSULT_INSTRUCTIONS and "ricerca web" not in CONSULT_INSTRUCTIONS
+    assert "l'ottico più vicino" in CONSULT_INSTRUCTIONS and "medico di base" in CONSULT_INSTRUCTIONS
+    assert "In generale" in CONSULT_INSTRUCTIONS
 
 
 # --- Tetto ai dati inviati -----------------------------------------------------

@@ -378,3 +378,29 @@ async def test_a_question_to_groq_carries_only_what_fits_the_budget(world):
         svc.db.execute("INSERT INTO lab_results (document_id, user_id, result_date, name, value) VALUES (?, ?, '', ?, '1')", (doc, svc.mario.id, "Analisi" + "x" * 400 + str(n)))
     await svc.consultant.ask(svc.mario, question="Come sto?")
     assert len(sent[0]) < 9000 + 1500  # dati (entro il tetto) + intestazione e domanda
+
+
+# --- Chiavi non ancora inserite: una nota, non un errore -----------------------
+
+
+async def test_a_key_not_yet_entered_is_a_neutral_note_shown_once_per_service(world):
+    svc = world()
+    svc.settings.update({"gemini_api_key": ""})
+    messages = await svc.ai.refresh_and_pick()  # documenti e domande sono entrambi su Gemini, senza chiave
+    assert messages == [("Google Gemini: chiave non impostata, elenco dei modelli non caricato.", None)]
+    assert svc.calls == []  # nessuna richiesta: senza chiave non si chiama nessuno
+
+
+async def test_a_missing_key_does_not_hide_a_real_failure_of_another_service(world):
+    svc = world(ai=lambda r: httpx.Response(401, json={"error": {"message": "Invalid API Key"}}))
+    svc.settings.update({"gemini_api_key": "", "ai_chat_provider": "groq"})
+    messages = await svc.ai.refresh_and_pick()
+    assert (messages[0][1], "chiave non impostata" in messages[0][0]) == (None, True)
+    assert any(ok is False and "La chiave di Groq non è valida" in m for m, ok in messages)
+
+
+async def test_missing_address_of_the_custom_service_is_a_note_too(world):
+    svc = world()
+    svc.settings.update({"gemini_api_key": "", "ai_chat_provider": "custom", "custom_api_key": "k"})
+    messages = await svc.ai.refresh_and_pick()
+    assert (None, True) == (messages[-1][1], "chiave non impostata" in messages[-1][0])
