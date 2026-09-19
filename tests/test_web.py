@@ -309,3 +309,90 @@ def test_edit_requires_login_and_csrf_and_a_real_user(client, service):
     login(client)
     assert client.post(f"/utenti/{user.id}/modifica", data={"name": "X"}).status_code == 403
     assert client.get("/utenti/999/modifica").status_code == 404
+
+
+# --- Prova Gemini e ricerca web ------------------------------------------------
+
+
+def test_probe_button_shows_each_result_with_the_real_reason(tmp_path, root):
+    import httpx
+
+    from famiglia.service import Service
+
+    def respond(request):
+        if b"googleSearch" in request.content:
+            return httpx.Response(429, json={"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota"}})
+        return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}]})
+
+    service = Service(tmp_path / "data", "chiave-di-test", root, gemini_http=httpx.AsyncClient(transport=httpx.MockTransport(respond)))
+    service.settings.update({"gemini_api_key": "AIza-test"})
+    set_password(service.settings, PASSWORD)
+    client = TestClient(create_app(service, secret_key="chiave-di-test", admin_user="admin"))
+    token = login(client)
+    html = client.post("/api/prova", data={"csrf": token}).text
+    assert "Modello principale (gemini-3.8-flash): funziona" in html
+    assert "Modello di riserva (gemini-3.5-flash-lite): funziona" in html
+    assert "Ricerca web con gemini-3.8-flash: 429" in html and "exceeded your current quota" in html
+
+
+def test_probe_without_a_key_says_so_and_requires_login(client):
+    assert client.post("/api/prova", follow_redirects=False).status_code == 303
+    token = login(client)
+    assert "manca la chiave Gemini" in client.post("/api/prova", data={"csrf": token}).text
+
+
+def test_web_search_switch_is_saved(client, service):
+    token = login(client)
+    assert 'name="consult_web_search" value="1" checked' in client.get("/api").text  # attiva di default
+    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash"})  # casella non spuntata
+    assert service.settings.get("consult_web_search") == "0"
+    client.post("/api", data={"csrf": token, "gemini_model": "gemini-3.8-flash", "consult_web_search": "1"})
+    assert service.settings.get("consult_web_search") == "1"
+
+
+# --- Coordinatore --------------------------------------------------------------
+
+
+def test_choose_and_clear_the_coordinator(cal_client):
+    client, service, _ = cal_client
+    token = login(client)
+    assert 'value="">Nessuno' in client.get("/utenti").text
+    response = client.post("/utenti/coordinatore", data={"csrf": token, "user_id": str(service.anna.id)})
+    assert "Anna riceverà sul suo calendario le visite di tutta la famiglia" in response.text
+    assert service.settings.get("coordinator_user_id") == str(service.anna.id)
+    html = client.get("/utenti").text
+    assert 'coordinatore</span>' in html and f'value="{service.anna.id}" selected' in html
+    client.post("/utenti/coordinatore", data={"csrf": token, "user_id": ""})
+    assert service.settings.get("coordinator_user_id") == ""
+
+
+@pytest.mark.parametrize("bad", ["999", "abc", "-1"])
+def test_invalid_coordinator_is_refused(cal_client, bad):
+    client, service, _ = cal_client
+    token = login(client)
+    assert "Utente non valido" in client.post("/utenti/coordinatore", data={"csrf": token, "user_id": bad}).text
+    assert service.settings.get("coordinator_user_id") == ""
+
+
+def test_coordinator_without_a_connected_calendar_is_flagged(cal_client):
+    client, service, _ = cal_client
+    token = login(client)
+    client.post("/utenti/coordinatore", data={"csrf": token, "user_id": str(service.anna.id)})  # Anna non è collegata
+    assert "non risulta collegato" in client.get("/utenti").text
+    client.post("/utenti/coordinatore", data={"csrf": token, "user_id": str(service.mario.id)})  # Mario sì
+    assert "non risulta collegato" not in client.get("/utenti").text
+
+
+def test_removing_the_coordinator_clears_the_setting(cal_client):
+    client, service, _ = cal_client
+    token = login(client)
+    client.post("/utenti/coordinatore", data={"csrf": token, "user_id": str(service.anna.id)})
+    client.post(f"/utenti/{service.anna.id}/elimina", data={"csrf": token})
+    assert service.settings.get("coordinator_user_id") == ""
+
+
+def test_coordinator_route_requires_login_and_csrf(cal_client):
+    client, service, _ = cal_client
+    assert client.post("/utenti/coordinatore", data={"user_id": "1"}, follow_redirects=False).status_code == 303
+    login(client)
+    assert client.post("/utenti/coordinatore", data={"user_id": "1"}).status_code == 403

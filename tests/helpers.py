@@ -67,7 +67,8 @@ class FakeComposio:
         if slug == "GOOGLECALENDAR_LIST_CALENDARS":
             return {"successful": True, "data": {"items": self.calendars}, "error": None}
         if slug == "GOOGLECALENDAR_CREATE_EVENT":
-            return {"successful": True, "data": {"response_data": {"id": "evt123", "summary": arguments["summary"]}}, "error": None}
+            created = sum(1 for slug_, _, _ in self.executed if slug_ == "GOOGLECALENDAR_CREATE_EVENT")
+            return {"successful": True, "data": {"response_data": {"id": f"evt{122 + created}", "summary": arguments["summary"]}}, "error": None}
         return {"successful": True, "data": {}, "error": None}
 
     def _authorize(self, *, user_id, toolkit):

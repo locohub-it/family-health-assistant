@@ -23,6 +23,10 @@
     <input id="gemini_model" name="gemini_model" type="text" value="{{ s.get('gemini_model') }}" required>
     <label for="gemini_fallback_model">Modello di riserva <span class="hint">(facoltativo)</span></label>
     <input id="gemini_fallback_model" name="gemini_fallback_model" type="text" value="{{ s.get('gemini_fallback_model') }}">
+    <label class="check"><input type="checkbox" name="consult_web_search" value="1" {{ 'checked' if s.get('consult_web_search') != '0' }}>
+      Usa la ricerca web di Google per spiegare i valori nelle risposte</label>
+    <div class="hint">Ha una quota sua: se è finita il bot risponde comunque con i dati salvati e lo dice.
+      Togli la spunta per non usarla mai.</div>
     <div class="hint">Se il modello principale ha finito le richieste gratuite o non risponde, il bot prova questo.
       Sul piano gratuito i limiti sono per modello, quindi un secondo modello raddoppia le richieste disponibili.
       Lascia vuoto per non usarne uno.</div>
@@ -40,5 +44,13 @@
   </div>
 
   <div class="actions"><button class="primary">Salva</button></div>
+</form>
+
+<form method="post" action="/api/prova" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2>Prova Gemini</h2>
+  <p class="hint">Fa tre piccole richieste vere (modello principale, di riserva e ricerca web) e mostra l'esito di ciascuna,
+    con il motivo esatto se una fallisce. Salva prima le modifiche.</p>
+  <div class="actions"><button>Prova ora</button></div>
 </form>
 {% endblock %}

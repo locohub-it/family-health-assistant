@@ -20,8 +20,10 @@ from ..auth import set_password, verify_password
 from ..calendar import CalendarError
 from ..clock import TIMEZONE
 from ..documents import DEFAULT_DOCUMENTS_DIR
+from ..gemini import GeminiError
 from ..service import Service
 from ..storage import StorageError
+from ..users import coordinator_of
 
 
 class LoginRequired(Exception):
@@ -188,8 +190,22 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             flash(request, "error", "Modello di riserva: inserisci un nome valido oppure lascia vuoto")
             return back("/api")
         values["gemini_fallback_model"] = fallback
+        values["consult_web_search"] = "1" if form.get("consult_web_search") else "0"
         settings.update(values)
         flash(request, "ok", "Chiavi salvate")
+        return back("/api")
+
+    @app.post("/api/prova")
+    async def api_probe(request: Request) -> Response:
+        """Tre piccole richieste vere: dicono cosa funziona di Gemini e, se no, il motivo esatto."""
+        await checked_form(request)
+        try:
+            results = await service.gemini.check()
+        except GeminiError as exc:
+            flash(request, "error", exc.user_message)
+            return back("/api")
+        for label, ok, detail in results:
+            flash(request, "ok" if ok else "error", f"{label}: {'funziona' if ok else detail}")
         return back("/api")
 
     # --- Utenti ------------------------------------------------------------------
@@ -237,6 +253,7 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             users=users,
             states=states,
             calendar_enabled=service.calendar.enabled,
+            coordinator=coordinator_of(settings, service.users),
         )
 
     @app.post("/utenti/{user_id}/aggiorna")
@@ -295,7 +312,25 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
     async def users_remove(request: Request, user_id: int) -> Response:
         await checked_form(request)
         service.users.remove(user_id)
+        if settings.get("coordinator_user_id") == str(user_id):
+            settings.update({"coordinator_user_id": ""})  # senza l'utente non c'è più un coordinatore
         flash(request, "ok", "Utente rimosso, con i suoi referti e appuntamenti salvati")
+        return back("/utenti")
+
+    @app.post("/utenti/coordinatore")
+    async def coordinator_save(request: Request) -> Response:
+        form = await checked_form(request)
+        raw = form.get("user_id", "").strip()
+        if not raw:
+            settings.update({"coordinator_user_id": ""})
+            flash(request, "ok", "Nessun coordinatore: ognuno riceve le visite solo sul proprio calendario")
+            return back("/utenti")
+        user = service.users.get(int(raw)) if raw.isdigit() else None
+        if user is None:
+            flash(request, "error", "Utente non valido")
+            return back("/utenti")
+        settings.update({"coordinator_user_id": str(user.id)})
+        flash(request, "ok", f"{user.name} riceverà sul suo calendario le visite di tutta la famiglia")
         return back("/utenti")
 
     @app.post("/utenti/{user_id}/collega")

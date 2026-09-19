@@ -12,7 +12,7 @@
     <tr><th>Nome</th><th>Ruolo</th><th>ID Telegram</th><th>Google Calendar</th><th></th></tr>
     {% for u in users %}
     <tr>
-      <td>{{ u.full_name }}{% if u.full_name != u.name %}<div class="hint">il bot lo chiama «{{ u.name }}»</div>{% endif %}
+      <td>{{ u.full_name }}{% if coordinator and coordinator.id == u.id %} <span class="badge ok">coordinatore</span>{% endif %}{% if u.full_name != u.name %}<div class="hint">il bot lo chiama «{{ u.name }}»</div>{% endif %}
         {% if not u.first_name and not u.last_name %}<div class="hint">manca il nome reale: <a href="/utenti/{{ u.id }}/modifica">aggiungilo</a></div>{% endif %}</td>
       <td>{{ u.role }}</td>
       <td><code>{{ u.telegram_id }}</code></td>
@@ -44,6 +44,25 @@
   </table></div>
   {% else %}<p class="hint">Nessun utente ancora.</p>{% endif %}
 </div>
+
+{% if users %}
+<form method="post" action="/utenti/coordinatore" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2>Coordinatore</h2>
+  <p class="hint">Chi coordina le visite riceve sul <b>proprio</b> calendario Google anche gli appuntamenti di tutti gli
+    altri, con il nome del paziente nel titolo. Ognuno continua ad avere la visita sul suo calendario.</p>
+  <label for="coordinator">Riceve le visite di tutta la famiglia</label>
+  <select id="coordinator" name="user_id">
+    <option value="">Nessuno</option>
+    {% for u in users %}<option value="{{ u.id }}" {{ 'selected' if coordinator and coordinator.id == u.id }}>{{ u.full_name }}</option>{% endfor %}
+  </select>
+  {% if coordinator and calendar_enabled and states.get(coordinator.id) and states.get(coordinator.id).state != 'ok' %}
+  <div class="flash error">Il calendario di {{ coordinator.name }} non risulta collegato: premi «Collega» sulla sua riga,
+    altrimenti le visite degli altri non arrivano.</div>
+  {% endif %}
+  <div class="actions"><button class="primary">Salva</button></div>
+</form>
+{% endif %}
 
 <form method="post" action="/utenti" class="card">
   <h2>Aggiungi utente</h2>

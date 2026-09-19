@@ -221,3 +221,128 @@ async def test_a_403_permission_error_gets_the_same_clear_message(make):
     with pytest.raises(CalendarError) as exc:
         await svc.calendar.connect_link(svc.mario)
     assert "non ha i permessi" in exc.value.user_message and "Forbidden: no" in str(exc.value)
+
+
+# --- Coordinatore --------------------------------------------------------------
+
+
+@pytest.fixture
+def family(make):
+    """Mario (paziente), Luca (coordinatore); entrambi con il calendario collegato."""
+
+    def _family(extraction=None, connected=("famiglia-111", "famiglia-333"), coordinator=True):
+        composio = FakeComposio(connected=set(connected))
+        svc = make(composio, extraction or appuntamento(date="2027-01-15", time="10:00", notes="Portare la tessera"))
+        svc.luca = svc.users.add(333, "Luca", "figlio", "Luca", "Rossi")
+        if coordinator:
+            svc.settings.update({"coordinator_user_id": str(svc.luca.id)})
+        return svc
+
+    return _family
+
+
+def creates(svc):
+    return [(user, args) for slug, args, user in svc.composio.executed if slug == "GOOGLECALENDAR_CREATE_EVENT"]
+
+
+async def test_coordinator_gets_a_copy_with_the_patient_name(family):
+    svc = family()
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    (patient_user, patient_args), (coord_user, coord_args) = creates(svc)
+    assert patient_user == "famiglia-111" and patient_args["summary"] == "Visita cardiologica"
+    assert coord_user == "famiglia-333" and coord_args["summary"] == "Visita cardiologica – Mario Rossi"
+    assert coord_args["description"] == "Paziente: Mario Rossi\nPortare la tessera"
+    assert coord_args["location"] == "Ospedale Nord" and coord_args["start_datetime"] == patient_args["start_datetime"]
+    assert "📅 L'ho aggiunta al calendario di Mario Rossi." in outcome.text
+    assert "📅 E anche a quello di Luca (coordinatore)." in outcome.text
+    row = svc.db.execute("SELECT * FROM appointments")[0]
+    assert (row["event_id"], row["coordinator_event_id"], row["coordinator_user_id"]) == ("evt123", "evt124", svc.luca.id)
+
+
+async def test_no_duplicate_when_the_patient_is_the_coordinator(family):
+    svc = family(coordinator=False)
+    svc.settings.update({"coordinator_user_id": str(svc.mario.id)})
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert len(creates(svc)) == 1 and "coordinatore" not in outcome.text
+
+
+async def test_without_a_coordinator_nothing_changes(family):
+    svc = family(coordinator=False)
+    await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert len(creates(svc)) == 1
+    assert svc.db.execute("SELECT coordinator_event_id FROM appointments")[0]["coordinator_event_id"] == ""
+
+
+async def test_coordinator_still_gets_it_if_the_patient_calendar_is_not_connected(family):
+    svc = family(connected=("famiglia-333",))
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert [u for u, _ in creates(svc)] == ["famiglia-333"]
+    assert "⚠️ Il Google Calendar di questa persona non è ancora collegato." in outcome.text
+    assert "📅 E anche a quello di Luca (coordinatore)." in outcome.text
+
+
+async def test_patient_keeps_the_event_if_the_coordinator_calendar_is_not_connected(family):
+    svc = family(connected=("famiglia-111",))
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert [u for u, _ in creates(svc)] == ["famiglia-111"]
+    assert "📅 L'ho aggiunta al calendario di Mario Rossi." in outcome.text
+    assert "⚠️ Non sono riuscito ad aggiungerla al calendario di Luca: " in outcome.text
+    assert svc.db.execute("SELECT event_id FROM appointments")[0]["event_id"] == "evt123"
+    assert any("(coordinatore)" in r["detail"] for r in svc.recent_activity(10) if r["kind"] == "errore")
+
+
+async def test_past_visit_gives_a_single_warning_and_no_calls(family):
+    svc = family(appuntamento(date="2020-01-15", time="10:00"))
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert outcome.text.count("già passata") == 1 and creates(svc) == []
+
+
+async def test_undo_removes_the_visit_from_both_calendars(family):
+    svc = family()
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    message = await svc.documents.undo(svc.mario, outcome.document_id)
+    deletes = [(user, args["event_id"]) for slug, args, user in svc.composio.executed if slug == "GOOGLECALENDAR_DELETE_EVENT"]
+    assert deletes == [("famiglia-111", "evt123"), ("famiglia-333", "evt124")]
+    assert "Ho tolto anche la visita dai calendari" in message
+
+
+async def test_undo_uses_the_coordinator_that_actually_received_the_copy(family):
+    svc = family()
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    anna = svc.users.add(444, "Anna")
+    svc.settings.update({"coordinator_user_id": str(anna.id)})  # il coordinatore cambia dopo
+    await svc.documents.undo(svc.mario, outcome.document_id)
+    deletes = [user for slug, _, user in svc.composio.executed if slug == "GOOGLECALENDAR_DELETE_EVENT"]
+    assert deletes == ["famiglia-111", "famiglia-333"]
+
+
+async def test_undo_when_the_coordinator_was_removed_warns_but_removes_the_rest(family):
+    svc = family()
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    svc.users.remove(svc.luca.id)
+    message = await svc.documents.undo(svc.mario, outcome.document_id)
+    assert "va cancellata a mano" in message
+    assert [u for s, _, u in svc.composio.executed if s == "GOOGLECALENDAR_DELETE_EVENT"] == ["famiglia-111"]
+    assert svc.db.execute("SELECT * FROM documents") == []
+
+
+async def test_a_coordinator_setting_pointing_to_a_missing_user_is_ignored(family):
+    svc = family(coordinator=False)
+    svc.settings.update({"coordinator_user_id": "9999"})
+    outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
+    assert len(creates(svc)) == 1 and "coordinatore" not in outcome.text
+
+
+def test_existing_databases_get_the_coordinator_columns(tmp_path):
+    import sqlite3
+
+    from famiglia.db import Database
+
+    path = tmp_path / "vecchio.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE appointments (id INTEGER PRIMARY KEY, document_id INTEGER, user_id INTEGER, starts_at TEXT, title TEXT, place TEXT, notes TEXT, event_id TEXT, created_at REAL)")
+    old.execute("INSERT INTO appointments VALUES (1, 1, 1, '2027-01-15', 'Visita', '', '', 'evtX', 0)")
+    old.commit()
+    old.close()
+    row = Database(path).execute("SELECT * FROM appointments")[0]
+    assert (row["event_id"], row["coordinator_event_id"], row["coordinator_user_id"]) == ("evtX", "", 0)

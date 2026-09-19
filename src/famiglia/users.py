@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from .db import Database
+from .settings import Settings
 
 MAX_NAME = 60
 
@@ -53,6 +54,12 @@ def _validated(name: str, role: str, first_name: str, last_name: str) -> tuple[s
     if len(role) > 40:
         raise ValueError("Il ruolo è troppo lungo (massimo 40 caratteri)")
     return name, role, first_name, last_name
+
+
+def coordinator_of(settings: Settings, users: "UserStore") -> User | None:
+    """L'utente scelto come coordinatore, se esiste ancora."""
+    raw = settings.get("coordinator_user_id")
+    return users.get(int(raw)) if raw.isdigit() else None
 
 
 class UserStore:

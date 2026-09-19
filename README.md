@@ -83,9 +83,13 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
 
 ## Primo avvio dal pannello
 
-1. **Chiavi API**: token del bot, chiave Gemini, chiave Composio. Sul piano gratuito Gemini ha
+1. **Chiavi API**: token del bot, chiave Gemini, chiave Composio. Il pulsante **Prova Gemini** fa tre
+   piccole richieste (modello principale, di riserva, ricerca web) e mostra per ciascuna l'esito e, se
+   fallisce, la quota esatta che Google indica. Sul piano gratuito Gemini ha
    limiti di richieste per modello: il **modello di riserva** entra in azione da solo quando quello
-   principale ha finito le richieste o non risponde, e il bot aspetta e riprova se il limite è al minuto.
+   principale ha finito le richieste o non risponde, e il bot aspetta e riprova se il limite è al minuto (e non aspetta invano se la quota è finita).
+   La ricerca web di Google nelle risposte ha una quota sua: se è finita, il bot risponde con i dati
+   salvati e lo dice; si può anche disattivare.
 2. **Cartella** (facoltativo): senza scegliere niente il bot salva in `Documenti`, dentro
    `STORAGE_ROOT`, e la crea da solo. Per cambiarla, sfoglia dentro `STORAGE_ROOT`, crea una
    cartella se serve e scegli «Usa questa cartella» (il pannello controlla che si possa
@@ -97,6 +101,10 @@ Il pannello è su `http://localhost:8080`. **Non esporlo su internet**: è pensa
    familiare. Con «Modifica» si correggono i dati (il database esistente si aggiorna da solo). Poi, per ognuno, **Collega**: si apre
    una pagina con il link (e il QR) su cui la persona accede al proprio Google. Lo stesso link lo
    riceve scrivendo `/calendario` al bot. Se ha più calendari, si sceglie quello delle visite.
+   Ognuno ha il **proprio** calendario Google. In più si può scegliere un **coordinatore**: chi
+   coordina le visite riceve sul suo calendario anche quelle di tutti gli altri, con il nome del
+   paziente nel titolo (la visita resta anche sul calendario di chi la riguarda; «Annulla» la toglie
+   da entrambi).
    Il pulsante **↻ Aggiorna** ricontrolla subito il collegamento di quella persona; se non si
    riesce a verificare, la causa vera compare sotto lo stato.
 

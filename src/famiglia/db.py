@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS appointments (
     place TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
     event_id TEXT NOT NULL DEFAULT '',
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    coordinator_user_id INTEGER NOT NULL DEFAULT 0,
+    coordinator_event_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +67,10 @@ CREATE TABLE IF NOT EXISTS activity (
 # Colonne aggiunte dopo la prima versione: si aggiungono ai database già esistenti senza perdere i dati.
 ADDED_COLUMNS = {
     "users": {"first_name": "TEXT NOT NULL DEFAULT ''", "last_name": "TEXT NOT NULL DEFAULT ''"},
+    "appointments": {
+        "coordinator_user_id": "INTEGER NOT NULL DEFAULT 0",
+        "coordinator_event_id": "TEXT NOT NULL DEFAULT ''",
+    },
 }
 
 

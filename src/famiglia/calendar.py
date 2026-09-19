@@ -40,6 +40,10 @@ class CalendarError(Exception):
         self.user_message = user_message
 
 
+class PastDateError(CalendarError):
+    """La visita è già passata: inutile provarci su un altro calendario."""
+
+
 @dataclass(frozen=True)
 class CalendarInfo:
     id: str
@@ -155,7 +159,7 @@ class Calendar:
         current = now or clock.now()
         # Senza ora conta il giorno: una visita di oggi con l'ora da confermare non è «passata».
         if (start < current) if hour else (start.date() < current.date()):
-            raise CalendarError("La data è già passata: non l'ho messa sul calendario.")
+            raise PastDateError("La data è già passata: non l'ho messa sul calendario.")
         if not await self.is_connected(user):
             raise CalendarError("Il Google Calendar di questa persona non è ancora collegato.")
 

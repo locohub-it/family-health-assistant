@@ -13,12 +13,12 @@ from datetime import date, datetime
 from typing import Callable
 
 from . import clock
-from .calendar import UNKNOWN_TIME, Calendar, CalendarError
+from .calendar import UNKNOWN_TIME, Calendar, CalendarError, PastDateError
 from .gemini import DocumentReader, Extraction
 from .records import Records
 from .settings import Settings
 from .storage import Storage, StorageError
-from .users import User, UserStore
+from .users import User, UserStore, coordinator_of
 
 SUPPORTED_MIME = {
     "image/jpeg": ".jpg",
@@ -223,14 +223,36 @@ class DocumentService:
         """Il calendario è un di più: se non va, la visita resta salvata e l'utente lo sa."""
         if self._calendar is None or not self._calendar.enabled:
             return ""
+        lines: list[str] = []
         try:
             event_id = await self._calendar.create_event(patient, starts_at, title, place, notes)
+        except PastDateError as exc:
+            return f"⚠️ {exc.user_message}"  # visita passata: non serve nemmeno al coordinatore
         except CalendarError as exc:
             self._log("errore", f"Calendario di {patient.name}: {exc}")
-            return f"⚠️ {exc.user_message}"
-        self._records.set_event_id(appointment_id, event_id)
-        line = f"📅 L'ho aggiunta al calendario di {patient.name}."
-        return line if "T" in starts_at else f"{line} L'ora non c'era: ho messo le {UNKNOWN_TIME}, da confermare."
+            lines.append(f"⚠️ {exc.user_message}")
+        else:
+            self._records.set_event_id(appointment_id, event_id)
+            line = f"📅 L'ho aggiunta al calendario di {patient.name}."
+            lines.append(line if "T" in starts_at else f"{line} L'ora non c'era: ho messo le {UNKNOWN_TIME}, da confermare.")
+
+        coordinator = coordinator_of(self._settings, self._users)
+        if coordinator is not None and coordinator.id != patient.id:
+            lines.append(await self._add_for_coordinator(coordinator, patient, appointment_id, starts_at, title, place, notes))
+        return "\n".join(lines)
+
+    async def _add_for_coordinator(
+        self, coordinator: User, patient: User, appointment_id: int, starts_at: str, title: str, place: str, notes: str
+    ) -> str:
+        """Copia della visita sul calendario di chi coordina la famiglia, con il nome del paziente."""
+        details = f"Paziente: {patient.full_name}" + (f"\n{notes}" if notes else "")
+        try:
+            event_id = await self._calendar.create_event(coordinator, starts_at, f"{title} – {patient.name}", place, details)
+        except CalendarError as exc:
+            self._log("errore", f"Calendario di {coordinator.name} (coordinatore): {exc}")
+            return f"⚠️ Non sono riuscito ad aggiungerla al calendario di {coordinator.name}: {exc.user_message}"
+        self._records.set_coordinator_event(appointment_id, coordinator.id, event_id)
+        return f"📅 E anche a quello di {coordinator.name} (coordinatore)."
 
     async def undo(self, sender: User, document_id: int) -> str:
         document = self._records.get_document(document_id)
@@ -248,14 +270,29 @@ class DocumentService:
         return "Annullato: ho tolto il documento." + warning
 
     async def _remove_calendar_events(self, document) -> str:
-        events = [a["event_id"] for a in self._records.appointments_of_document(document["id"]) if a["event_id"]]
-        patient = self._users.get(document["user_id"])
-        if not events or patient is None or self._calendar is None:
+        """Toglie la visita dal calendario del paziente e da quello del coordinatore che l'aveva ricevuta."""
+        if self._calendar is None:
             return ""
-        try:
-            for event_id in events:
-                await self._calendar.delete_event(patient, event_id)
-        except CalendarError as exc:
-            self._log("errore", f"Calendario di {patient.name}: {exc}")
-            return "\n⚠️ Non sono riuscito a togliere la visita dal calendario: va cancellata a mano."
-        return "\nHo tolto anche la visita dal calendario."
+        patient = self._users.get(document["user_id"])
+        targets: list[tuple[User | None, str]] = []
+        for appointment in self._records.appointments_of_document(document["id"]):
+            if appointment["event_id"]:
+                targets.append((patient, appointment["event_id"]))
+            if appointment["coordinator_event_id"]:
+                targets.append((self._users.get(appointment["coordinator_user_id"]), appointment["coordinator_event_id"]))
+        if not targets:
+            return ""
+        removed, failed = 0, False
+        for user, event_id in targets:
+            if user is None:  # l'utente non c'è più: non si sa su quale calendario agire
+                failed = True
+                continue
+            try:
+                await self._calendar.delete_event(user, event_id)
+                removed += 1
+            except CalendarError as exc:
+                self._log("errore", f"Calendario di {user.name}: {exc}")
+                failed = True
+        if failed:
+            return "\n⚠️ Non sono riuscito a togliere la visita da un calendario: va cancellata a mano."
+        return "\nHo tolto anche la visita dal calendario." if removed == 1 else "\nHo tolto anche la visita dai calendari."

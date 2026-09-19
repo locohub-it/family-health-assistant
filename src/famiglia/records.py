@@ -45,6 +45,12 @@ class Records:
     def set_event_id(self, appointment_id: int, event_id: str) -> None:
         self._db.execute("UPDATE appointments SET event_id = ? WHERE id = ?", (event_id, appointment_id))
 
+    def set_coordinator_event(self, appointment_id: int, coordinator_user_id: int, event_id: str) -> None:
+        self._db.execute(
+            "UPDATE appointments SET coordinator_user_id = ?, coordinator_event_id = ? WHERE id = ?",
+            (coordinator_user_id, event_id, appointment_id),
+        )
+
     def get_document(self, document_id: int):
         rows = self._db.execute("SELECT * FROM documents WHERE id = ?", (document_id,))
         return rows[0] if rows else None

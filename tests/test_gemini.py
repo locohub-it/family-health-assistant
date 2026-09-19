@@ -173,13 +173,49 @@ async def test_zero_quota_says_the_model_is_not_available_on_this_plan(gemini):
     assert "non è disponibile con il piano" in exc.value.user_message
 
 
-async def test_429_without_details_retries_with_growing_waits_then_tries_the_fallback(gemini):
+async def test_429_with_no_information_gets_one_quick_retry_then_tries_the_fallback(gemini):
     client, seen = gemini(lambda r: httpx.Response(429, json={"error": {"code": 429, "message": "boh", "status": "RESOURCE_EXHAUSTED"}}))
     with pytest.raises(GeminiError) as exc:
         await client.analyze_document(JPEG, "image/jpeg")
     assert "molto occupato" in exc.value.user_message
-    assert [model_of(r) for r in seen] == ["gemini-test-flash"] * 3 + ["gemini-test-lite"] * 3
-    assert client.slept == [9, 17, 9, 17]
+    assert [model_of(r) for r in seen] == ["gemini-test-flash"] * 2 + ["gemini-test-lite"] * 2
+    assert client.slept == [6.0, 6.0]
+
+
+GENERIC_QUOTA = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota, please check your plan and billing details."}}
+
+
+async def test_plain_quota_message_is_not_waited_for_and_says_the_free_requests_are_over(gemini):
+    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA))
+    with pytest.raises(GeminiError) as exc:
+        await client.analyze_document(JPEG, "image/jpeg")
+    assert client.slept == [] and len(seen) == 2  # niente attese: un modello, poi la riserva
+    assert "richieste gratuite di Gemini sono esaurite" in exc.value.user_message and "fatturazione" in exc.value.user_message
+    assert "exceeded your current quota" in str(exc.value)
+
+
+async def test_the_registry_detail_names_the_quota_that_was_hit(gemini):
+    body = quota_body("GenerateRequestsPerDayPerProjectPerModel-FreeTier", "20", "3600s")
+    body["error"]["details"][0]["violations"][0]["quotaMetric"] = "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+    body["error"]["details"][0]["violations"][0]["quotaDimensions"] = {"model": "gemini-test-flash"}
+    client, _ = gemini(lambda r: httpx.Response(429, json=body))
+    with pytest.raises(GeminiError) as exc:
+        await client.analyze_document(JPEG, "image/jpeg")
+    detail = str(exc.value)
+    assert "generate_content_free_tier_requests" in detail and "limite 20" in detail
+    assert "modello gemini-test-flash" in detail and "riprovare tra 3600s" in detail
+
+
+@pytest.mark.parametrize(
+    "kind,retry,attempt,expected",
+    [("giorno", 5, 0, None), ("zero", None, 0, None), ("quota", None, 0, None), ("quota", 10, 0, 10),
+     ("minuto", None, 0, 8), ("minuto", None, 1, 16), ("minuto", 2, 2, None), ("altro", None, 0, 5),
+     ("altro", None, 1, None), ("altro", 300, 0, None)],
+)
+def test_wait_before_retry(kind, retry, attempt, expected):
+    from famiglia.gemini import Quota, wait_before_retry
+
+    assert wait_before_retry(Quota(kind, retry), attempt) == expected
 
 
 async def test_a_wait_longer_than_the_limit_is_not_waited_for(gemini):
@@ -227,3 +263,73 @@ async def test_no_more_than_two_calls_run_at_once(tmp_path, root):
     svc.settings.update({"gemini_api_key": "AIza-test"})
     await asyncio.gather(*(svc.gemini.analyze_document(JPEG, "image/jpeg") for _ in range(6)))
     assert peak == 2
+
+
+# --- Domande: la ricerca web ha una quota sua ----------------------------------
+
+
+def has_tools(request: httpx.Request) -> bool:
+    return bool(json.loads(request.content).get("tools"))
+
+
+async def test_answer_uses_web_search_when_it_works(gemini):
+    client, seen = gemini(lambda r: httpx.Response(200, json=candidate("Risposta con web.")))
+    assert await client.answer("## Mario", "Mario", question="Ciao?") == "Risposta con web."
+    assert has_tools(seen[0]) and len(seen) == 1
+
+
+async def test_when_the_web_search_quota_is_over_the_answer_uses_the_saved_data_only(gemini):
+    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA) if has_tools(r) else httpx.Response(200, json=candidate("Dai dati salvati.")))
+    answer = await client.answer("## Mario", "Mario", question="Come va?")
+    assert answer.startswith("Dai dati salvati.") and "non riesco a consultare il web" in answer
+    assert [has_tools(r) for r in seen] == [True, True, False]  # con web su entrambi i modelli, poi senza web
+    assert any("Ricerca web non disponibile" in r["detail"] for r in client.service.recent_activity(10))
+
+
+async def test_web_search_can_be_switched_off_from_the_panel(gemini):
+    client, seen = gemini(lambda r: httpx.Response(200, json=candidate("Senza web.")))
+    client._settings.update({"consult_web_search": "0"})
+    assert await client.answer("## Mario", "Mario", question="Ciao?") == "Senza web."
+    assert not has_tools(seen[0])
+
+
+async def test_if_even_the_answer_without_web_search_is_over_quota_it_gives_up(gemini):
+    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA))
+    with pytest.raises(GeminiError) as exc:
+        await client.answer("## Mario", "Mario", question="Come va?")
+    assert "richieste gratuite" in exc.value.user_message
+    assert [has_tools(r) for r in seen] == [True, True, False, False]  # nessun ciclo infinito
+
+
+async def test_a_bad_key_does_not_trigger_the_web_search_fallback(gemini):
+    client, seen = gemini(lambda r: httpx.Response(403, json={"error": {"code": 403, "message": "no", "status": "PERMISSION_DENIED"}}))
+    with pytest.raises(GeminiError, match="403"):
+        await client.answer("## Mario", "Mario", question="Come va?")
+    assert len(seen) == 1
+
+
+# --- Prova dal pannello ---------------------------------------------------------
+
+
+async def test_check_reports_each_model_and_the_web_search_separately(gemini):
+    client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA) if has_tools(r) else httpx.Response(200, json=candidate("ok")))
+    results = await client.check()
+    assert [(label, ok) for label, ok, _ in results] == [
+        ("Modello principale (gemini-test-flash)", True),
+        ("Modello di riserva (gemini-test-lite)", True),
+        ("Ricerca web con gemini-test-flash", False),
+    ]
+    assert "exceeded your current quota" in results[2][2] and "429" in results[2][2]
+    assert client.slept == []  # è una prova: nessuna attesa né nuovi tentativi
+
+
+async def test_check_with_a_missing_model_shows_the_404(gemini):
+    client, _ = gemini(lambda r: httpx.Response(404, json={"error": {"code": 404, "message": "model not found", "status": "NOT_FOUND"}}))
+    results = await client.check()
+    assert all(not ok and "404" in detail for _, ok, detail in results)
+
+
+async def test_check_without_a_key_reports_it(tmp_path, root):
+    svc = Service(tmp_path / "data", "chiave-di-test", root)
+    with pytest.raises(GeminiError, match="manca la chiave"):
+        await svc.gemini.check()

@@ -18,8 +18,12 @@ DEFAULTS: dict[str, str] = {
     "gemini_model": "gemini-3.8-flash",
     # Se il modello principale ha finito la quota o non risponde, si prova questo (vuoto = nessuno)
     "gemini_fallback_model": "gemini-3.5-flash-lite",
+    # Se la ricerca web di Google ha finito la quota, le risposte usano solo i dati salvati ("0" = mai la ricerca web)
+    "consult_web_search": "1",
     # Composio (Google Calendar)
     "composio_api_key": "",
+    # Utente che riceve sul proprio calendario le visite di tutta la famiglia (id dell'utente; vuoto = nessuno)
+    "coordinator_user_id": "",
     # Dove salvare le foto dei documenti, relativo alla radice montata in /storage ("." = la radice).
     # Vuoto = la cartella predefinita «Documenti» dentro la radice.
     "documents_dir": "",
