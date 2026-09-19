@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 
 import uvicorn
 
@@ -19,8 +20,12 @@ async def run() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     secret_key = os.environ.get("SECRET_KEY", "")
-    service = Service(os.environ.get("DATA_DIR", "data"), secret_key, os.environ.get("STORAGE_ROOT", "/storage"))
-    bootstrap_password(service.settings, os.environ.get("ADMIN_PASSWORD", ""))
+    try:
+        service = Service(os.environ.get("DATA_DIR", "data"), secret_key, os.environ.get("STORAGE_ROOT", "/storage"))
+        bootstrap_password(service.settings, os.environ.get("ADMIN_PASSWORD", ""))
+    except (RuntimeError, ValueError) as exc:
+        # Configurazione sbagliata (SECRET_KEY o ADMIN_PASSWORD dello stack): una riga chiara, non un traceback.
+        sys.exit(f"ERRORE DI CONFIGURAZIONE: {exc}. Correggi le variabili dello stack e riavvia.")
 
     app = create_app(
         service,
