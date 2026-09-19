@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from .ai import PROVIDERS, ROLES, AiError, Endpoint, suggest_model, whisper_model
+from .ai import PROVIDERS, ROLES, AiError, Endpoint, suggest_model, vision_candidates, whisper_model
 from .gemini import Extraction, Gemini
 from .openai_compat import OpenAICompat
 from .settings import Settings
@@ -120,6 +120,8 @@ class AiRouter:
                 # Per Gemini il modello resta quello di «Chiavi API», salvo una scelta esplicita per questa funzione.
                 shown = current or self._settings.get("gemini_model")
                 messages.append((f"{label}: Gemini, modello {shown} ({len(ids)} disponibili)", True))
+            elif not current and role == "docs":
+                messages.append(await self._pick_vision_model(provider, ids))
             elif not current:
                 chosen = suggest_model(role, ids)
                 if chosen:
@@ -133,6 +135,29 @@ class AiRouter:
             else:
                 messages.append((f"{label}: {current} (trovato tra i {len(ids)} modelli di {name})", True))
         return messages
+
+    async def _pick_vision_model(self, provider: str, ids: list[str]) -> tuple[str, bool]:
+        """Per i documenti serve la visione: si prova ogni candidato con un'immagine e si tiene il primo che la legge."""
+        name, tried, last_error = PROVIDERS[provider]["label"], [], ""
+        for model in vision_candidates(ids):
+            ok, detail = await self._openai.probe(self.endpoint(provider, model), "docs")
+            tried.append(model)
+            if ok:
+                self._settings.update({"ai_docs_model": model})
+                return f"{ROLES['docs']}: scelto {model}, che legge le immagini (provati {len(tried)} su {len(ids)} modelli di {name})", True
+            last_error = detail
+        listed = ", ".join(tried) or "nessuno"
+        return (
+            f"{ROLES['docs']}: nessun modello di {name} che legga le immagini (provati: {listed}). "
+            f"Scrivi il nome a mano oppure usa Gemini per i documenti. Ultimo errore: {last_error}",
+            False,
+        )
+
+    async def repick(self) -> list[tuple[str, bool]]:
+        """Dimentica i modelli scelti dei servizi non Gemini e li sceglie di nuovo (con la prova delle immagini)."""
+        cleared = {f"ai_{role}_model": "" for role in ROLES if self.provider(role) != "gemini"}
+        self._settings.update(cleared)
+        return await self.refresh_and_pick()
 
     # --- Prova ----------------------------------------------------------------------
 
@@ -148,4 +173,6 @@ class AiRouter:
         except AiError as exc:
             return label, False, exc.user_message
         ok, detail = await self._openai.probe(endpoint, role)
+        if not ok and role == "docs" and "non sa leggere le immagini" in detail:
+            detail += " Premi «Scegli di nuovo in automatico» per cercare un modello che le legga."
         return label, ok, detail

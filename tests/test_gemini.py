@@ -281,7 +281,8 @@ async def test_answer_uses_web_search_when_it_works(gemini):
 async def test_when_the_web_search_quota_is_over_the_answer_uses_the_saved_data_only(gemini):
     client, seen = gemini(lambda r: httpx.Response(429, json=GENERIC_QUOTA) if has_tools(r) else httpx.Response(200, json=candidate("Dai dati salvati.")))
     answer = await client.answer("## Mario", "Mario", question="Come va?")
-    assert answer.startswith("Dai dati salvati.") and "non riesco a consultare il web" in answer
+    assert answer.startswith("Dai dati salvati.") and "non riesco a cercare sul web" in answer
+    assert "«in generale»" in answer and "meno aggiornate" in answer
     assert [has_tools(r) for r in seen] == [True, True, False]  # con web su entrambi i modelli, poi senza web
     assert any("Ricerca web non disponibile" in r["detail"] for r in client.service.recent_activity(10))
 

@@ -191,3 +191,17 @@ async def test_details_are_saved_in_the_database(make):
     svc = make()
     outcome = await upload(svc, svc.mario, altro("ricetta", details="  Metformina 500 mg, due volte al giorno  "))
     assert svc.records.get_document(outcome.document_id)["details"] == "Metformina 500 mg, due volte al giorno"
+
+
+async def test_the_instructions_separate_saved_data_from_general_explanations(gemini):
+    client, seen = gemini("Risposta.")
+    await client.answer("## Mario", "Mario", question="Cosa significa sfera +0,50?")
+    system = json.dumps(seen[0]["systemInstruction"])
+    assert "In generale" in system and "citando la data del documento" in system
+
+
+def test_the_no_web_variant_keeps_the_same_rule_but_drops_the_web_search():
+    from famiglia.gemini import CONSULT_INSTRUCTIONS, CONSULT_INSTRUCTIONS_NO_WEB
+
+    assert "In generale" in CONSULT_INSTRUCTIONS_NO_WEB
+    assert "ricerca web" in CONSULT_INSTRUCTIONS and "ricerca web" not in CONSULT_INSTRUCTIONS_NO_WEB

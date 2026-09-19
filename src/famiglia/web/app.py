@@ -257,6 +257,14 @@ def create_app(service: Service, secret_key: str, admin_user: str, cookie_secure
             flash(request, "ok" if ok else "error", text)
         return back("/ia")
 
+    @app.post("/ia/auto")
+    async def ai_repick(request: Request) -> Response:
+        """Scelta automatica da capo: utile se un modello scelto prima non legge le immagini."""
+        await checked_form(request)
+        for text, ok in await service.ai.repick():
+            flash(request, "ok" if ok else "error", text)
+        return back("/ia")
+
     @app.post("/ia/prova/{role}")
     async def ai_probe(request: Request, role: str) -> Response:
         await checked_form(request)

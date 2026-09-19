@@ -28,7 +28,8 @@
     <h2>{{ label }}</h2>
     {% if role == 'docs' %}
     <p class="hint">Legge foto e PDF dei documenti. Serve un modello con <b>visione</b> per le foto; i PDF con testo li
-      leggono anche i modelli solo testo. Con <b>Prova</b> vedi se il modello accetta le immagini.</p>
+      leggono anche i modelli solo testo. Il pannello sceglie provando davvero i modelli con un'immagine, perché i
+      nomi non dicono chi vede e cambiano spesso.</p>
     {% else %}
     <p class="hint">Risponde alle domande scritte e ai vocali. I vocali si trascrivono con il modello Whisper del servizio, se
       ne ha uno (Groq sì). La ricerca web di Google c'è solo con Gemini.</p>
@@ -55,6 +56,15 @@
   {% endfor %}
 
   <div class="actions"><button class="primary">Salva e cerca i modelli</button></div>
+</form>
+
+<form method="post" action="/ia/auto" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2>Scegli di nuovo i modelli</h2>
+  <p class="hint">Se un modello scelto prima non funziona (per esempio non legge le immagini), qui il pannello
+    dimentica le scelte dei servizi diversi da Gemini e le rifà da capo: per i documenti prova i modelli uno alla volta
+    con un'immagine e tiene il primo che la legge.</p>
+  <div class="actions"><button>Scegli di nuovo in automatico</button></div>
 </form>
 
 <div class="grid">

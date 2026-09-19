@@ -39,10 +39,12 @@ class Endpoint:
 
 
 # Modelli che non rispondono in chat: audio, embedding, sicurezza...
-NOT_FOR_CHAT = re.compile(r"whisper|tts|speech|embed|guard|moderation|playai|transcri|rerank|imagen|dall-e|veo|lyria", re.I)
+NOT_FOR_CHAT = re.compile(
+    r"whisper|tts|speech|embed|guard|moderation|playai|transcri|rerank|imagen|dall-e|veo|lyria|compound|safeguard", re.I
+)
 # Nomi che, per ruolo, indicano il modello più adatto; il primo che compare vince.
 PREFERRED = {
-    "docs": ("scout", "maverick", "vision", "gemini", "gpt-4o", "pixtral", "llava", "-vl"),
+    "docs": ("scout", "maverick", "vision", "gemini", "gpt-4o", "pixtral", "llava", "-vl", "qwen3", "qwen"),
     "chat": ("deepseek-chat", "v4-flash", "deepseek-flash", "flash", "versatile", "gpt-oss-120b", "70b", "instruct", "chat"),
 }
 UNSTABLE = re.compile(r"lite|preview|exp|beta|mini|tiny|small", re.I)
@@ -73,6 +75,21 @@ def suggest_model(role: str, ids: list[str]) -> str:
     if unstable_backup:
         return max(unstable_backup, key=lambda i: (_version(i), i))
     return usable[0] if usable else ""
+
+
+def vision_candidates(ids: list[str], limit: int = 6) -> list[str]:
+    """Modelli da provare, nell'ordine, per trovarne uno che legga le immagini.
+
+    I nomi non bastano a saperlo (cambiano ogni pochi mesi): il router li prova davvero con un'immagine di prova.
+    Prima quelli con un nome noto per la visione (stabili e più recenti per primi), poi gli altri.
+    """
+    usable = usable_models(ids)
+    ordered: list[str] = []
+    for pattern in PREFERRED["docs"]:
+        matches = [i for i in usable if pattern in i.lower() and i not in ordered]
+        ordered += sorted(matches, key=lambda i: (bool(UNSTABLE.search(i)), tuple(-n for n in _version(i)), i))
+    ordered += [i for i in usable if i not in ordered]
+    return ordered[:limit]
 
 
 def whisper_model(ids: list[str]) -> str:

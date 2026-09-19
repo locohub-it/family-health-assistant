@@ -171,8 +171,13 @@ async def test_refresh_stores_the_list_and_reads_it_back(world):
     assert svc.ai.cached_models("groq") == []  # una cache rovinata non rompe nulla
 
 
+def models_or_ok(models):
+    """Elenco dei modelli per GET /models, risposta valida per le richieste di chat e immagine."""
+    return lambda r: httpx.Response(200, json={"data": models}) if r.url.path.endswith("/models") else completion("ok")
+
+
 async def test_refresh_and_pick_chooses_a_model_for_each_role_by_itself(world):
-    svc = world(ai=lambda r: httpx.Response(200, json={"data": GROQ_MODELS}))
+    svc = world(ai=models_or_ok(GROQ_MODELS))
     svc.settings.update({"ai_docs_provider": "groq", "ai_chat_provider": "groq"})
     messages = await svc.ai.refresh_and_pick()
     assert svc.ai.model("docs") == "meta-llama/llama-4-scout-17b-16e-instruct"  # il modello con visione
@@ -257,3 +262,86 @@ async def test_a_question_answered_by_groq_through_the_whole_consultant(world):
     svc = world(ai=lambda r: completion("Tutto nella norma."))
     use_groq(svc)
     assert await svc.consultant.ask(svc.mario, question="Come sto?") == "Tutto nella norma."
+
+
+# --- Scelta del modello con visione: si prova davvero ---------------------------
+
+# Elenco realistico di Groq oggi: i modelli con visione sono i Qwen, non i Llama 4 di prima.
+GROQ_TODAY = [{"id": i} for i in (
+    "llama-3.1-8b-instant", "llama-3.3-70b-versatile", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "groq/compound",
+    "groq/compound-mini", "qwen/qwen3.6-27b", "qwen/qwen3.8-27b", "whisper-large-v3", "whisper-large-v3-turbo",
+)]
+
+
+def vision_only(*vision_ids):
+    """Server finto: elenco dei modelli; le richieste con immagine riescono solo per i modelli indicati."""
+    tried = []
+
+    def respond(request):
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": GROQ_TODAY})
+        body = json.loads(request.content)
+        has_image = "image_url" in json.dumps(body["messages"])
+        if has_image:
+            tried.append(body["model"])
+        if has_image and body["model"] not in vision_ids:
+            return httpx.Response(400, json={"error": {"message": "This model does not support image input"}})
+        return completion("ok")
+
+    respond.tried = tried
+    return respond
+
+
+async def test_documents_model_is_the_first_one_that_really_reads_images(world):
+    respond = vision_only("qwen/qwen3.6-27b", "qwen/qwen3.8-27b")
+    svc = world(ai=respond)
+    svc.settings.update({"ai_docs_provider": "groq"})
+    messages = await svc.ai.refresh_and_pick()
+    assert svc.ai.model("docs") == "qwen/qwen3.8-27b"  # la versione più alta, provata per prima
+    assert respond.tried == ["qwen/qwen3.8-27b"]
+    assert any(ok and "scelto qwen/qwen3.8-27b, che legge le immagini" in m for m, ok in messages)
+
+
+async def test_a_candidate_that_fails_the_image_test_is_skipped(world):
+    respond = vision_only("qwen/qwen3.6-27b")  # la 3.8 non accetta le immagini
+    svc = world(ai=respond)
+    svc.settings.update({"ai_docs_provider": "groq"})
+    await svc.ai.refresh_and_pick()
+    assert svc.ai.model("docs") == "qwen/qwen3.6-27b" and respond.tried == ["qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]
+
+
+async def test_no_model_that_reads_images_says_so_and_never_picks_a_text_model(world):
+    respond = vision_only()  # nessuno legge le immagini
+    svc = world(ai=respond)
+    svc.settings.update({"ai_docs_provider": "groq"})
+    messages = await svc.ai.refresh_and_pick()
+    assert svc.ai.model("docs") == ""
+    text = next(m for m, ok in messages if not ok)
+    assert "nessun modello di Groq che legga le immagini" in text and "usa Gemini per i documenti" in text
+    assert "This model does not support image input" in text and len(respond.tried) == 6  # non si prova all'infinito
+    assert "groq/compound" not in respond.tried  # i sistemi «agentici» e i modelli audio si escludono
+
+
+async def test_repick_forgets_the_old_wrong_model_and_finds_a_working_one(world):
+    respond = vision_only("qwen/qwen3.8-27b")
+    svc = world(ai=respond)
+    svc.settings.update({"ai_docs_provider": "groq", "ai_docs_model": "llama-3.3-70b-versatile",  # scelto in passato, senza visione
+                         "ai_chat_provider": "groq", "ai_chat_model": "llama-3.3-70b-versatile"})
+    assert not (await svc.ai.probe("docs"))[1]  # la prova lo conferma: non legge immagini
+    await svc.ai.repick()
+    assert svc.ai.model("docs") == "qwen/qwen3.8-27b" and svc.ai.model("chat") == "llama-3.3-70b-versatile"
+    assert (await svc.ai.probe("docs"))[1]
+
+
+async def test_repick_leaves_gemini_roles_alone(world):
+    svc = world(gemini=lambda r: httpx.Response(200, json={"models": [{"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]}]}))
+    svc.settings.update({"ai_chat_model": "gemini-scelto-a-mano"})
+    await svc.ai.repick()
+    assert svc.ai.model("chat") == "gemini-scelto-a-mano"
+
+
+async def test_probe_of_a_model_without_vision_tells_what_to_press(world):
+    svc = world(ai=vision_only())
+    svc.settings.update({"ai_docs_provider": "groq", "ai_docs_model": "llama-3.3-70b-versatile"})
+    _, ok, detail = await svc.ai.probe("docs")
+    assert not ok and "non sa leggere le immagini" in detail and "Scegli di nuovo in automatico" in detail

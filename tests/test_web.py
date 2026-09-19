@@ -526,3 +526,20 @@ def test_status_page_shows_which_service_answers(ia_client):
     client.post("/ia", data={"csrf": token, "groq_api_key": "gsk", "ai_docs_provider": "gemini", "ai_chat_provider": "groq"})
     html = client.get("/").text
     assert "Groq" in html and "llama-3.3-70b-versatile" in html
+
+
+def test_repick_button_redoes_the_automatic_choice(ia_client):
+    client, service = ia_client
+    token = login(client)
+    client.post("/ia", data={"csrf": token, "groq_api_key": "gsk", "ai_docs_provider": "groq", "ai_chat_provider": "groq"})
+    service.settings.update({"ai_docs_model": "modello-sbagliato-senza-visione"})
+    response = client.post("/ia/auto", data={"csrf": token})
+    assert "che legge le immagini" in response.text
+    assert service.ai.model("docs") == "meta-llama/llama-4-scout-17b-16e-instruct"
+
+
+def test_repick_requires_login_and_csrf(ia_client):
+    client, _ = ia_client
+    assert client.post("/ia/auto", follow_redirects=False).status_code == 303
+    login(client)
+    assert client.post("/ia/auto").status_code == 403
