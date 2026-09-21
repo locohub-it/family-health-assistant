@@ -30,6 +30,7 @@ Compaiono anche nel **menu** di Telegram e nel messaggio di `/start`, dove basta
 | `/start` | Saluto e come usare il bot. |
 | `/visita` | Segna una nuova visita, a passi guidati con i pulsanti: **per chi** è → **per quando** → **che visita** è → **conferma**. Finché non si tocca *Conferma* non si salva niente. |
 | `/appuntamenti` | Mostra le prossime visite, una scheda ciascuna con i pulsanti **✏️ Modifica** (data e ora, tipo di visita, dove si fa) ed **🗑️ Elimina** (chiede conferma). |
+| `/in_sospeso` | Mostra le visite **prescritte ma ancora da prenotare** (impegnativa senza data), con il nome scritto sulla ricetta e il pulsante **📅 Imposta la data**. Si scrive la data della prenotazione, la visita si salva e va sul Google Calendar. |
 | `/calendario` | Manda il link con cui la persona collega il proprio Google Calendar. |
 
 Cosa si può scrivere, oltre ai comandi:
@@ -40,8 +41,19 @@ Cosa si può scrivere, oltre ai comandi:
 - **Una domanda**, scritta o a voce, sui propri referti e sulle proprie visite.
 - **«modifica appuntamento»** o **«elimina appuntamento»**, esattamente così: apre l'elenco delle visite con il
   solo pulsante *Modifica* o *Elimina*. Nessun'altra frase fa questo.
+- **«appuntamenti in sospeso»**, esattamente così: fa la stessa cosa di `/in_sospeso`.
 - **«prenota una visita»** (o simili, come «metti un appuntamento»): il bot non segna niente, ma propone
   «Vuoi segnare una nuova visita?» con un pulsante che apre `/visita`.
+
+### Visite in sospeso (impegnativa senza prenotazione)
+
+Se il documento è un'**impegnativa** che prescrive una visita o un esame ma non ha ancora una data (la
+prenotazione si fa di persona, dopo), il bot lo salva comunque come documento e mette la visita **«in sospeso»**,
+con il nome scritto sulla ricetta («Visita cardiologica»). Non finisce sul calendario finché non c'è una data.
+Più avanti, con **`/in_sospeso`**, si sceglie la visita, si scrive la data della prenotazione («26/10 alle 15»)
+e la visita viene salvata e aggiunta al calendario (anche a quello del coordinatore). Una visita in sospeso si
+può anche togliere: la ricetta resta salvata. Se un documento ha più visite prescritte, ognuna è una voce
+separata. Il bot risponde alle domande sulle visite «da prenotare» con l'elenco di quelle in sospeso.
 
 ### Come si segnano le visite
 

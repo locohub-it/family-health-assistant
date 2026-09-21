@@ -58,11 +58,13 @@ async def test_appointment_without_time_keeps_the_date_only(make):
     assert svc.db.execute("SELECT starts_at FROM appointments")[0]["starts_at"] == "2026-11-03"
 
 
-async def test_appointment_without_a_valid_date_is_not_scheduled(make):
-    svc = make(appuntamento(date="prossimo martedì"))
+async def test_appointment_without_a_valid_date_is_kept_pending_and_not_put_on_the_calendar(make):
+    svc = make(appuntamento(date="prossimo martedì", title="Visita cardiologica"))
     outcome = await svc.documents.process(svc.mario, JPEG, "image/jpeg")
-    assert "non trovo la data" in outcome.text
-    assert svc.db.execute("SELECT * FROM appointments") == []
+    assert "non c'è ancora una data" in outcome.text and "«Visita cardiologica» è tra le visite in sospeso" in outcome.text
+    assert "/in_sospeso" in outcome.text
+    (row,) = svc.db.execute("SELECT * FROM appointments")
+    assert (row["starts_at"], row["title"], row["event_id"]) == ("", "Visita cardiologica", "")
     assert svc.db.execute("SELECT * FROM documents")  # il documento resta salvato
 
 

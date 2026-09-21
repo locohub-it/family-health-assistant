@@ -27,7 +27,7 @@ from .ai import AiError
 from .settings import Settings
 from .storage import StorageError
 from .users import User, UserStore
-from .visits import Reply, Visits, offer_new_visit, wants_list, wants_new_visit
+from .visits import Reply, Visits, offer_new_visit, wants_list, wants_new_visit, wants_pending
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ UNDO_PREFIX = "annulla:"
 MENU = [
     ("visita", "Segna una nuova visita"),
     ("appuntamenti", "Vedi, cambia o togli le tue visite"),
+    ("in_sospeso", "Visite ancora da prenotare: dai la data"),
     ("calendario", "Collega il tuo Google Calendar"),
 ]
 
@@ -139,6 +140,7 @@ class BotRunner:
         app.add_handler(CommandHandler(["calendario", "calendar"], self._connect_calendar))
         app.add_handler(CommandHandler("visita", self._new_visit))
         app.add_handler(CommandHandler("appuntamenti", self._list_visits))
+        app.add_handler(CommandHandler(["in_sospeso", "appuntamenti_in_sospeso"], self._list_pending))
         app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._text))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self._voice))
@@ -170,7 +172,8 @@ class BotRunner:
                 "Puoi anche farmi una domanda sui tuoi referti, scritta o a voce.\n\n"
                 "Per le visite:\n"
                 "/visita – segna una nuova visita\n"
-                "/appuntamenti – vedi, cambia o togli le tue visite"
+                "/appuntamenti – vedi, cambia o togli le tue visite\n"
+                "/in_sospeso – le visite prescritte ancora da prenotare: qui dai la data"
             )
 
     async def _connect_calendar(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -203,6 +206,13 @@ class BotRunner:
         context.user_data.clear()
         await self._send_replies(message, self._visits.list_cards(user))
 
+    async def _list_pending(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user, message = self._approved(update), update.effective_message
+        if user is None or message is None or self._visits is None:
+            return
+        context.user_data.clear()
+        await self._send_replies(message, self._visits.list_pending(user))
+
     async def _visit_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query, user = update.callback_query, self._approved(update)
         if query is None or user is None or self._visits is None:
@@ -229,7 +239,7 @@ class BotRunner:
     async def _unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if self._approved(update) and update.effective_message:
             await update.effective_message.reply_text(
-                "Questo comando non lo conosco. Puoi usare /visita, /appuntamenti e /calendario; "
+                "Questo comando non lo conosco. Puoi usare /visita, /appuntamenti, /in_sospeso e /calendario; "
                 "altrimenti mandami la foto di un documento o scrivimi una domanda."
             )
 
@@ -240,6 +250,10 @@ class BotRunner:
             return
         question = (message.text or "").strip()
         if self._visits is not None:
+            if wants_pending(question):
+                context.user_data.clear()
+                await self._send_replies(message, self._visits.list_pending(user))
+                return
             action = wants_list(question)
             if action:
                 context.user_data.clear()

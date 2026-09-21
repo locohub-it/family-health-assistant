@@ -110,6 +110,11 @@ class Consultant:
             if a["notes"]:
                 lines.append(f"  Da ricordare (scritto sul foglio della prenotazione): {a['notes']}")
 
+        pending = self._records.pending_of(patient.id)
+        if pending:
+            lines.append("Visite prescritte ma ancora da prenotare (manca la data):")
+            lines += [f"- {a['title']}" for a in pending]
+
         others = self._records.documents(patient.id, ("ricetta", "altro"), max_others)
         if others:
             lines.append("Ricette e altri documenti:")

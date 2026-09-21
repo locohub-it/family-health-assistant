@@ -74,6 +74,14 @@ class Records:
             (*ids, from_date, limit),
         )
 
+    def pending_appointments(self, user_ids: Iterable[int]):
+        """Le visite prescritte ma ancora senza data di prenotazione, di queste persone."""
+        ids = list(user_ids)
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        return self._db.execute(f"SELECT * FROM appointments WHERE user_id IN ({marks}) AND starts_at = '' ORDER BY id", tuple(ids))
+
     def update_appointment(self, appointment_id: int, starts_at: str, title: str, place: str) -> None:
         self._db.execute(
             "UPDATE appointments SET starts_at = ?, title = ?, place = ? WHERE id = ?", (starts_at, title, place, appointment_id)
@@ -118,4 +126,10 @@ class Records:
         return self._db.execute("SELECT * FROM lab_results WHERE document_id = ? ORDER BY id", (document_id,))
 
     def appointments(self, user_id: int, limit: int):
-        return self._db.execute("SELECT * FROM appointments WHERE user_id = ? ORDER BY starts_at DESC LIMIT ?", (user_id, limit))
+        """Le visite con una data: quelle ancora senza data (in sospeso) si leggono con `pending_of`."""
+        return self._db.execute(
+            "SELECT * FROM appointments WHERE user_id = ? AND starts_at != '' ORDER BY starts_at DESC LIMIT ?", (user_id, limit)
+        )
+
+    def pending_of(self, user_id: int):
+        return self._db.execute("SELECT * FROM appointments WHERE user_id = ? AND starts_at = '' ORDER BY id", (user_id,))

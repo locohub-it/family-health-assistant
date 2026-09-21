@@ -26,10 +26,11 @@ IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 JSON_RULES = (
     "\nRispondi SOLO con un oggetto JSON valido, senza testo prima o dopo e senza blocchi di codice, con esattamente "
-    "questi campi. kind è uno tra appuntamento, referto, ricetta, altro, illeggibile. appointment è null oppure "
+    "questi campi. kind è uno tra appuntamento, referto, ricetta, altro, illeggibile. pending_visits è una lista di testi, anche vuota. appointment è null oppure "
     '{"title": "", "date": "AAAA-MM-GG", "time": "HH:MM", "place": "", "notes": ""}. lab_results è una lista, anche vuota.\n'
     '{"kind": "referto", "patient_name": "", "document_date": "AAAA-MM-GG", "summary": "", "details": "", '
-    '"appointment": null, "lab_results": [{"name": "", "value": "", "unit": "", "reference": "", "flag": ""}]}'
+    '"appointment": null, "lab_results": [{"name": "", "value": "", "unit": "", "reference": "", "flag": ""}], '
+    '"pending_visits": []}'
 )
 
 
@@ -134,6 +135,7 @@ def _normalize(obj: dict) -> dict:
     """Modelli diversi omettono campi o usano numeri al posto di testo: si riportano allo schema atteso."""
     appointment = obj.get("appointment")
     results = obj.get("lab_results")
+    pending = obj.get("pending_visits") or []
     return {
         "kind": _text(obj.get("kind")).lower(),
         "patient_name": _text(obj.get("patient_name")),
@@ -150,6 +152,7 @@ def _normalize(obj: dict) -> dict:
             for item in (results if isinstance(results, list) else [])
             if isinstance(item, dict)
         ],
+        "pending_visits": [_text(v) for v in (pending if isinstance(pending, list) else [pending]) if _text(v)],
     }
 
 

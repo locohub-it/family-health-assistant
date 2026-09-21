@@ -33,6 +33,8 @@ _BOOK_NOUN = re.compile(
     re.IGNORECASE,
 )
 
+_PENDING_PHRASE = re.compile(r"^\s*(?:gli\s+)?appuntamenti\s+in\s+sospeso\s*[.!]?\s*$", re.IGNORECASE)
+
 WHEN_PROMPT = "Per quando è la visita? Scrivimi il giorno e, se lo sai, l'ora. Per esempio:\n• 26/10 alle 15\n• 26 ottobre 15:30\n• domani alle 9"
 TITLE_PROMPT = "Che visita è? Scrivimelo in poche parole, per esempio: dalla dottoressa Rossi, oculista, prelievo del sangue."
 EXPIRED = "Questa richiesta è scaduta. Per ricominciare scrivi /visita."
@@ -49,6 +51,11 @@ def wants_list(text: str) -> str | None:
     """«modifica appuntamento» → "edit", «elimina appuntamento» → "delete"; qualunque altra frase → None."""
     found = _PHRASE.match(text or "")
     return {"modifica": "edit", "elimina": "delete"}[found.group(1).lower()] if found else None
+
+
+def wants_pending(text: str) -> bool:
+    """Esattamente «appuntamenti in sospeso» (come il comando /in_sospeso, ma scritto)."""
+    return bool(_PENDING_PHRASE.match(text or ""))
 
 
 def wants_new_visit(text: str) -> bool:
@@ -74,7 +81,8 @@ class Visits:
     # --- Schede delle visite -----------------------------------------------------------
 
     def _card(self, row, patient_name: str) -> str:
-        lines = [f"📅 {_when_text(row['starts_at'])}", f"«{row['title']}» – {patient_name}"]
+        when = f"📅 {_when_text(row['starts_at'])}" if row["starts_at"] else "🕓 Data da fissare"
+        lines = [when, f"«{row['title']}» – {patient_name}"]
         if row["place"]:
             lines.append(f"Dove: {row['place']}")
         return "\n".join(lines)
@@ -85,6 +93,10 @@ class Visits:
 
     def _card_reply(self, row, extra: str = "", actions: tuple[str, ...] = ("edit", "delete")) -> Reply:
         buttons = []
+        if not row["starts_at"]:  # in sospeso: si dà la data, oppure si toglie
+            buttons = [("📅 Imposta la data", f"a:ew:{row['id']}"), ("🗑️ Elimina", f"a:d:{row['id']}")]
+            text = self._card(row, self._name_of(row["user_id"]))
+            return Reply(f"{extra}\n\n{text}" if extra else text, [buttons])
         if "edit" in actions:
             buttons.append(("✏️ Modifica", f"a:e:{row['id']}"))
         if "delete" in actions:
@@ -100,6 +112,14 @@ class Visits:
         header = {"edit": "Quale visita vuoi modificare?", "delete": "Quale visita vuoi eliminare?"}.get(action, "Ecco le tue prossime visite:")
         actions = (action,) if action else ("edit", "delete")
         return [Reply(header)] + [self._card_reply(row, actions=actions) for row in rows]
+
+    def list_pending(self, user: User) -> list[Reply]:
+        """Le visite prescritte ma ancora senza data, con il nome scritto sulla ricetta e il pulsante per dare la data."""
+        rows = self._documents.pending_appointments(user)
+        if not rows:
+            return [Reply("Non hai visite in sospeso: per tutte c'è già una data.")]
+        header = "Visite in sospeso, da prenotare:" if len(rows) > 1 else "Hai una visita in sospeso, da prenotare:"
+        return [Reply(header)] + [self._card_reply(row) for row in rows]
 
     # --- Nuova visita ----------------------------------------------------------------------
 
@@ -173,15 +193,25 @@ class Visits:
             field_name = {"ew": "when", "et": "title", "ep": "place"}[action]
             state.clear()
             state.update(kind="edit", at=time.time(), field=field_name, id=appointment_id)
+            when_prompt = (
+                "Quando hai prenotato? Scrivi il giorno e l'ora. Per esempio:\n• 26/10 alle 15\n• domani alle 9"
+                if not row["starts_at"]
+                else "Scrivi la nuova data e ora. Per esempio:\n• 26/10 alle 15\n• domani alle 9"
+            )
             prompt = {
-                "when": "Scrivi la nuova data e ora. Per esempio:\n• 26/10 alle 15\n• domani alle 9",
+                "when": when_prompt,
                 "title": TITLE_PROMPT,
                 "place": "Scrivi dove si fa la visita (studio, ospedale, indirizzo). Scrivi «-» per toglierlo.",
             }[field_name]
             return Reply(prompt, [[("✖️ Annulla", f"a:b:{appointment_id}")]])
         if action == "d":
+            question = (
+                "Vuoi togliere questa visita in sospeso? La ricetta resta salvata."
+                if not row["starts_at"]
+                else "Vuoi eliminare questa visita? Sparirà anche dal calendario."
+            )
             return Reply(
-                self._card(row, self._name_of(row["user_id"])) + "\n\nVuoi eliminare questa visita? Sparirà anche dal calendario.",
+                self._card(row, self._name_of(row["user_id"])) + "\n\n" + question,
                 [[("🗑️ Sì, elimina", f"a:dy:{appointment_id}"), ("No, tienila", f"a:b:{appointment_id}")]],
             )
         if action == "dy":
@@ -245,8 +275,11 @@ class Visits:
             cleaned = re.sub(r"\s+", " ", text).strip()[:120]
             changes["place"] = "" if cleaned.lower() in {"-", "nessuno", "niente", "nessun luogo"} else cleaned
         state.clear()
+        before = self._documents.own_appointment(user, appointment_id)[0]
+        was_pending = before is not None and not before["starts_at"]
         note = await self._documents.edit_appointment(user, appointment_id, **changes)
         row = self._documents.own_appointment(user, appointment_id)[0]
         if row is None:
             return Reply(note)
-        return self._card_reply(row, extra=f"Fatto, ho cambiato la visita.\n{note}".strip())
+        done = "Fatto, ho fissato la visita." if was_pending else "Fatto, ho cambiato la visita."
+        return self._card_reply(row, extra=f"{done}\n{note}".strip())

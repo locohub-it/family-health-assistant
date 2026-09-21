@@ -14,7 +14,7 @@ from typing import Callable, Literal, Protocol
 import httpx
 from google import genai
 from google.genai import errors, types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from . import clock
 from .ai import AiError, Endpoint, NotConfigured, tiny_png
@@ -143,6 +143,18 @@ class Extraction(BaseModel):
     )
     appointment: AppointmentInfo | None = Field(description="Solo se kind è appuntamento, altrimenti null")
     lab_results: list[LabResult] = Field(description="Solo se kind è referto con valori misurati, altrimenti lista vuota")
+    pending_visits: list[str] = Field(
+        description="Visite o esami specialistici prescritti dal documento (impegnativa) per cui NON c'è una data già "
+        "fissata, ciascuno come è scritto, ad esempio Visita cardiologica; lista vuota se non ce ne sono"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _older_answers_have_no_pending_visits(cls, data):
+        """Le risposte salvate prima di questo campo e quelle di modelli che lo omettono valgono «nessuna»."""
+        if isinstance(data, dict):
+            data.setdefault("pending_visits", [])
+        return data
 
 
 ANALYZE_INSTRUCTIONS = """\
@@ -159,6 +171,10 @@ Regole:
 - Se un dato manca lascia il campo vuoto (o null / lista vuota).
 - Date sempre nel formato AAAA-MM-GG, ore nel formato HH:MM. Le date italiane sono giorno/mese/anno.
 - Per i referti elenca ogni parametro misurato come voce separata.
+- Un'impegnativa (ricetta che prescrive una visita o un esame specialistico) senza una data già fissata NON è una \
+prenotazione: elenca in pending_visits il nome di ogni visita o esame prescritto, come è scritto (per esempio \
+«Visita cardiologica»), una voce per prestazione. Non inserire i farmaci. Se il documento ha già una data di \
+prenotazione, pending_visits resta vuoto.
 - Nel campo details trascrivi tutto ciò che potrebbe servire a rispondere a domande future (per esempio farmaci con
   dosaggio e posologia, diottrie delle lenti, diagnosi, conclusioni del medico): non riassumere, riporta i valori.
 """

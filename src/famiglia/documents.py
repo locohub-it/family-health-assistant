@@ -37,6 +37,7 @@ TITLES = re.compile(r"\b(sig\.ra|dott\.ssa|signora|signor|sigg|sig|dott|dr|prof|
 
 
 NOT_FOUND = "Questa visita non c'è più, oppure non puoi cambiarla."
+MAX_PENDING = 6  # visite in sospeso ricavate da un solo documento
 
 
 @dataclass
@@ -185,11 +186,39 @@ class DocumentService:
     async def _save_details(self, document_id: int, patient: User, extraction: Extraction, doc_date: str) -> str:
         who = patient.name
         if extraction.kind == "referto":
-            return self._save_lab_report(document_id, patient, extraction, doc_date)
-        if extraction.kind == "appuntamento":
-            return await self._save_appointment(document_id, patient, extraction)
-        label = "la ricetta" if extraction.kind == "ricetta" else "il documento"
-        return f"Ho salvato {label} di {who}.\n{extraction.summary}"
+            text = self._save_lab_report(document_id, patient, extraction, doc_date)
+        elif extraction.kind == "appuntamento":
+            text = await self._save_appointment(document_id, patient, extraction)
+        else:
+            label = "la ricetta" if extraction.kind == "ricetta" else "il documento"
+            text = f"Ho salvato {label} di {who}.\n{extraction.summary}"
+        return text + self._save_pending(document_id, patient, extraction)
+
+    @staticmethod
+    def pending_names(extraction: Extraction) -> list[str]:
+        """Visite da prenotare: quelle prescritte senza data, più una prenotazione letta senza data."""
+        names = list(extraction.pending_visits)
+        info = extraction.appointment
+        if extraction.kind == "appuntamento" and not (info and _valid_date(info.date)):
+            names.insert(0, info.title if info and info.title.strip() else "Visita medica")
+        unique: list[str] = []
+        for name in names:
+            name = re.sub(r"\s+", " ", name).strip(" .")[:80]
+            if name and name.casefold() not in {u.casefold() for u in unique}:
+                unique.append(name)
+        return unique[:MAX_PENDING]
+
+    def _save_pending(self, document_id: int, patient: User, extraction: Extraction) -> str:
+        """Una visita prescritta ma non ancora prenotata si salva «in sospeso»: la data si darà più avanti."""
+        names = self.pending_names(extraction)
+        for name in names:
+            self._records.add_appointment(document_id, patient.id, "", name, "", "")
+        if not names:
+            return ""
+        self._log("in sospeso", f"{patient.name}: {', '.join(names)}")
+        shown = f"«{names[0]}»" if len(names) == 1 else "\n" + "\n".join(f"• {n}" for n in names)
+        head = f"{shown} è tra le visite in sospeso" if len(names) == 1 else f"Queste visite sono tra quelle in sospeso:{shown}"
+        return f"\n\n🕓 {head}: quando avrai la data della prenotazione tocca /in_sospeso e me la dici."
 
     def _save_lab_report(self, document_id: int, patient: User, extraction: Extraction, doc_date: str) -> str:
         results = [r for r in extraction.lab_results if r.name.strip() and r.value.strip()]
@@ -210,10 +239,7 @@ class DocumentService:
         info = extraction.appointment
         day = _valid_date(info.date) if info else ""
         if not info or not day:
-            return (
-                f"Ho salvato il documento di {patient.name}, ma non trovo la data della visita: "
-                "non l'ho messa sul calendario. Riprova con una foto in cui si legge bene la data."
-            )
+            return f"Ho salvato il documento di {patient.name}: non c'è ancora una data, quindi non l'ho messo sul calendario."
         hour = _valid_time(info.time)
         starts_at = f"{day}T{hour}" if hour else day
         title = info.title.strip() or "Visita medica"
@@ -325,6 +351,10 @@ class DocumentService:
         """Le prossime visite di chi scrive e dei familiari che gestisce."""
         return self._records.upcoming_appointments(self.manageable_ids(sender), clock.now().strftime("%Y-%m-%d"), limit)
 
+    def pending_appointments(self, sender: User):
+        """Le visite prescritte a chi scrive e ai familiari che gestisce, ancora senza data di prenotazione."""
+        return self._records.pending_appointments(self.manageable_ids(sender))
+
     def own_appointment(self, sender: User, appointment_id: int):
         """(visita, paziente) se esiste e `sender` può gestirla, altrimenti (None, None)."""
         row = self._records.get_appointment(appointment_id)
@@ -367,7 +397,8 @@ class DocumentService:
         _, failed = await self._delete_events(row, patient)
         self._records.clear_event_ids(appointment_id)
         self._records.update_appointment(appointment_id, new_start, new_title, new_place)
-        lines = [await self._add_to_calendar(patient, appointment_id, new_start, new_title, new_place, row["notes"], updated=True)]
+        # Una visita in sospeso non ha ancora un evento: darle la data è il primo inserimento, non un aggiornamento.
+        lines = [await self._add_to_calendar(patient, appointment_id, new_start, new_title, new_place, row["notes"], updated=bool(row["starts_at"]))]
         if failed:
             lines.append("⚠️ Non sono riuscito a togliere la vecchia visita da un calendario: va cancellata a mano.")
         self._log("appuntamento", f"{patient.name}: visita modificata")

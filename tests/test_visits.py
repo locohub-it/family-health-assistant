@@ -690,8 +690,8 @@ def test_new_handlers_and_menu_are_registered_behind_the_gate(make):
     svc.bot._register(app)
     assert min(app.handlers) == -1 and len(app.handlers[-1]) == 1
     names = {h.callback.__name__ for group in app.handlers.values() for h in group}
-    assert {"_new_visit", "_list_visits", "_visit_button"} <= names
-    assert [name for name, _ in MENU] == ["visita", "appuntamenti", "calendario"]
+    assert {"_new_visit", "_list_visits", "_list_pending", "_visit_button"} <= names
+    assert [name for name, _ in MENU] == ["visita", "appuntamenti", "in_sospeso", "calendario"]
 
 
 async def test_the_command_menu_is_published_and_a_failure_does_not_stop_the_bot(make):
